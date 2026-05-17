@@ -38,6 +38,62 @@ class HomeScreen extends StatelessWidget {
                 'Encuentra a tu grupo en festivales, conciertos\ny eventos masivos.',
                 style: TextStyle(color: AppTheme.textMuted, height: 1.5),
               ),
+              const SizedBox(height: 16),
+              if (controller.savedGroup != null)
+                Card(
+                  color: const Color(0xFF172B1A),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Último grupo conectado',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(color: AppTheme.accentGreen),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          controller.savedGroup!.groupName,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyLarge
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'PIN: ${controller.savedGroup!.groupCode}',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: AppTheme.textMuted),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: () async {
+                              await controller.restoreSavedGroup(
+                                  requireVerification: false);
+                              if (!context.mounted) return;
+                              Navigator.pushReplacement(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const RadarScreen(),
+                                ),
+                              );
+                            },
+                            child: const Text('Reconectar al grupo'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               const Spacer(),
               ElevatedButton.icon(
                 onPressed: () => Navigator.push(

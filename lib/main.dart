@@ -4,19 +4,25 @@ import 'package:provider/provider.dart';
 import 'config/theme/app_theme.dart';
 import 'screens/home_screen.dart';
 import 'services/group_controller.dart';
+import 'services/group_storage.dart';
 import 'services/location/location_service.dart';
 import 'services/transport/nearby/nearby_transport.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Para producción real, usamos NearbyTransport para comunicación P2P
-  // entre dispositivos cercanos (Bluetooth/WiFi Direct)
   final transport = NearbyTransport();
   final location = LocationService();
+  final storage = GroupStorage();
+  final controller = GroupController(
+    location: location,
+    transport: transport,
+    storage: storage,
+  );
+  await controller.loadSavedGroup();
 
   runApp(
     ChangeNotifierProvider(
-      create: (_) => GroupController(location: location, transport: transport),
+      create: (_) => controller,
       child: const BuscamigosApp(),
     ),
   );

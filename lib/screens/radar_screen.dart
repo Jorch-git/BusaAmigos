@@ -270,6 +270,18 @@ class _RadarScreenState extends State<RadarScreen> {
                       ],
                     ),
                   ),
+                if (reach == TransportReach.local && controller.group?.self?.lastPosition == null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'PIN cercano por BT: ${controller.group?.code ?? ''}',
+                      style: const TextStyle(
+                        color: AppTheme.accentGreen,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 if (transportState == TransportState.degraded ||
                     transportState == TransportState.connecting)
                   const Padding(

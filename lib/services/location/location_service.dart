@@ -65,29 +65,41 @@ class LocationService {
     }
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      throw StateError('GPS desactivado en el dispositivo');
-    }
-
-    _posSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 2,
-      ),
-    ).listen(
-      (gpsPos) {
+    if (serviceEnabled) {
+      _posSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 2,
+        ),
+      ).listen(
+        (gpsPos) {
+          final pos = model.Position(
+            latitude: gpsPos.latitude,
+            longitude: gpsPos.longitude,
+            accuracy: gpsPos.accuracy,
+            heading: gpsPos.heading >= 0 ? gpsPos.heading : null,
+            timestamp: DateTime.now(),
+          );
+          _lastPosition = pos;
+          _positionCtrl.add(pos);
+        },
+        onError: (e) => debugPrint('LocationService: error GPS: $e'),
+      );
+    } else {
+      debugPrint('LocationService: GPS desactivado, solo brújula habilitada');
+      final cached = await Geolocator.getLastKnownPosition();
+      if (cached != null) {
         final pos = model.Position(
-          latitude: gpsPos.latitude,
-          longitude: gpsPos.longitude,
-          accuracy: gpsPos.accuracy,
-          heading: gpsPos.heading >= 0 ? gpsPos.heading : null,
+          latitude: cached.latitude,
+          longitude: cached.longitude,
+          accuracy: cached.accuracy,
+          heading: cached.heading >= 0 ? cached.heading : null,
           timestamp: DateTime.now(),
         );
         _lastPosition = pos;
         _positionCtrl.add(pos);
-      },
-      onError: (e) => debugPrint('LocationService: error GPS: $e'),
-    );
+      }
+    }
 
     _compassSub = FlutterCompass.events?.listen((event) {
       final heading = event.heading;

@@ -108,7 +108,8 @@ class _CompassScreenState extends State<CompassScreen> {
 
     final selfPos = group.self?.lastPosition;
     final result = DistanceCalculator.between(selfPos, target.lastPosition);
-    final relativeAngle = result.bearing != null
+    final hasDirection = result.bearing != null;
+    final relativeAngle = hasDirection
         ? (result.bearing! - _userHeading + 360) % 360
         : 0.0;
 
@@ -119,10 +120,10 @@ class _CompassScreenState extends State<CompassScreen> {
     final headingText = '${_userHeading.toStringAsFixed(0)}° ${_cardinalFromAngle(_userHeading)}';
     final bearingText = result.bearing != null
         ? '${result.bearing!.toStringAsFixed(0)}°'
-        : 'Sin datos GPS';
+        : (result.source == DistanceSource.rssi ? 'Estimado por BT' : 'Sin datos GPS');
     final precisionText = selfPos?.accuracy != null
         ? '±${selfPos!.accuracy!.toStringAsFixed(0)} m'
-        : 'Sin precisión';
+        : (selfPos == null ? 'Sin GPS activo' : 'Sin precisión');
     final statusColor = target.status == MemberStatus.online
         ? AppTheme.accentGreen
         : AppTheme.textMuted;
@@ -177,6 +178,25 @@ class _CompassScreenState extends State<CompassScreen> {
                   ),
                 ],
               ),
+              if (result.source == DistanceSource.rssi && !hasDirection)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E4625),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Sin GPS activo: usando solo proximidad BT para mantener la búsqueda activa. PIN ${group.code}',
+                      style: const TextStyle(
+                        color: AppTheme.accentGreen,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 20),
               Expanded(
                 child: Column(

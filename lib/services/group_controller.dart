@@ -11,6 +11,7 @@ import '../models/position.dart';
 import '../models/sos_alert.dart';
 import 'crypto/group_code.dart';
 import 'crypto/group_crypto.dart';
+import 'group_storage.dart';
 import 'location/location_service.dart';
 import 'transport/transport_message.dart';
 import 'transport/transport_service.dart';
@@ -26,11 +27,15 @@ enum GroupVerificationState {
 class GroupController extends ChangeNotifier {
   final LocationService location;
   final TransportService transport;
+  final GroupStorage storage;
 
   GroupController({
     required this.location,
     required this.transport,
+    required this.storage,
   });
+
+  SavedGroup? savedGroup;
 
   // ---- Estado público ----
 
@@ -86,6 +91,7 @@ class GroupController extends ChangeNotifier {
       groupName: groupName,
       myDisplayName: myDisplayName,
       requireVerification: false,
+      wasHost: true,
     );
   }
 
@@ -102,7 +108,28 @@ class GroupController extends ChangeNotifier {
       groupName: 'Grupo',
       myDisplayName: myDisplayName,
       requireVerification: requireVerification,
+      wasHost: false,
     );
+  }
+
+  Future<Group> restoreSavedGroup({bool requireVerification = false}) async {
+    final saved = savedGroup ?? await storage.load();
+    if (saved == null) {
+      throw StateError('No hay grupo guardado para restaurar');
+    }
+    return _bootstrap(
+      code: saved.groupCode,
+      groupName: saved.groupName,
+      myDisplayName: saved.displayName,
+      requireVerification: requireVerification,
+      selfId: saved.selfId,
+      wasHost: saved.wasHost,
+    );
+  }
+
+  Future<void> loadSavedGroup() async {
+    savedGroup = await storage.load();
+    notifyListeners();
   }
 
   Future<Group> _bootstrap({
@@ -110,8 +137,10 @@ class GroupController extends ChangeNotifier {
     required String groupName,
     required String myDisplayName,
     required bool requireVerification,
+    required bool wasHost,
+    String? selfId,
   }) async {
-    _selfId = _uuid.v4();
+    _selfId = selfId ?? _uuid.v4();
     _crypto = await GroupCrypto.deriveFromCode(code);
 
     final self = Member(
@@ -203,6 +232,7 @@ class GroupController extends ChangeNotifier {
       });
     }
 
+    await _saveLastGroup(wasHost: wasHost);
     notifyListeners();
     return _group!;
   }
@@ -253,6 +283,8 @@ class GroupController extends ChangeNotifier {
     _selfId = null;
     _verificationState = GroupVerificationState.notRequired;
     _outbox.clear();
+    savedGroup = null;
+    await storage.clear();
     notifyListeners();
   }
 
@@ -604,6 +636,19 @@ class GroupController extends ChangeNotifier {
 
     _outbox.removeWhere((p) => delivered.contains(p));
     if (delivered.isNotEmpty) notifyListeners();
+  }
+
+  Future<void> _saveLastGroup({required bool wasHost}) async {
+    if (_group == null || _selfId == null) return;
+    final saved = SavedGroup(
+      groupCode: _group!.code,
+      groupName: _group!.name,
+      displayName: _group!.self?.displayName ?? '',
+      selfId: _selfId!,
+      wasHost: wasHost,
+    );
+    savedGroup = saved;
+    await storage.save(saved);
   }
 
   int _colorSeedFor(String id) {
