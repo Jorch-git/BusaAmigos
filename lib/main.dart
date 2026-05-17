@@ -8,6 +8,7 @@ import 'services/location/location_service.dart';
 import 'services/transport/nearby/nearby_transport.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   // Para producción real, usamos NearbyTransport para comunicación P2P
   // entre dispositivos cercanos (Bluetooth/WiFi Direct)
   final transport = NearbyTransport();

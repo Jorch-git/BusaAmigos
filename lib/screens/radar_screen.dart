@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config/theme/app_theme.dart';
 import '../models/member.dart';
@@ -26,6 +28,7 @@ class RadarScreen extends StatefulWidget {
 class _RadarScreenState extends State<RadarScreen> {
   int _tabIndex = 0;
   double _radius = 50;
+  bool _searchMode = false;
 
   StreamSubscription? _sosSub;
   bool _sosScreenOpen = false;
@@ -58,6 +61,10 @@ class _RadarScreenState extends State<RadarScreen> {
   @override
   void dispose() {
     _sosSub?.cancel();
+    if (_searchMode) {
+      WakelockPlus.disable();
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
     super.dispose();
   }
 
@@ -116,6 +123,20 @@ class _RadarScreenState extends State<RadarScreen> {
                 top: 12,
                 right: 12,
                 child: _buildScaleSelector(),
+              ),
+              Positioned(
+                bottom: 24,
+                left: 16,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.search, size: 18),
+                  label: Text(_searchMode ? 'Búsqueda ON' : 'Modo búsqueda'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _searchMode ? const Color(0xFFEF9F27) : AppTheme.accentGreen,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  onPressed: _toggleSearchMode,
+                ),
               ),
               Positioned(
                 bottom: 24,
@@ -229,6 +250,26 @@ class _RadarScreenState extends State<RadarScreen> {
                     ],
                   ],
                 ),
+                if (_searchMode)
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF9F27).withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.battery_charging_full,
+                            size: 12, color: Color(0xFFEF9F27)),
+                        SizedBox(width: 6),
+                        Text('Modo búsqueda activo - pantalla encendida',
+                            style: TextStyle(
+                                color: AppTheme.textMuted, fontSize: 10)),
+                      ],
+                    ),
+                  ),
                 if (transportState == TransportState.degraded ||
                     transportState == TransportState.connecting)
                   const Padding(
@@ -251,6 +292,24 @@ class _RadarScreenState extends State<RadarScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Reenviando mensaje de saludo...')),
     );
+  }
+
+  Future<void> _toggleSearchMode() async {
+    final enable = !_searchMode;
+    if (enable) {
+      WakelockPlus.enable();
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      if (!mounted) return;
+      setState(() => _searchMode = true);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Modo búsqueda activo: pantalla encendida, la batería consumirá más rápido'),
+      ));
+    } else {
+      WakelockPlus.disable();
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      if (!mounted) return;
+      setState(() => _searchMode = false);
+    }
   }
 
   Widget _buildScaleSelector() {

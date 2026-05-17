@@ -428,21 +428,25 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
 
   Widget _buildNearbyPanel(GroupController controller) {
     final transport = controller.transport;
-
-    // Intentamos acceder a los datos del NearbyTransport si es la implementación activa.
-    final isNearby = transport is NearbyTransport;
-    final peerIds = isNearby
-        ? transport.connectedPeerIds
-        : <String>{};
+    final nearby = transport is NearbyTransport ? transport : null;
+    final peerIds = nearby?.connectedPeerIds ?? <String>{};
+    final lastSeenLabel = nearby?.lastPeerSeenAt != null
+        ? '${DateTime.now().difference(nearby!.lastPeerSeenAt!).inSeconds}s ago'
+        : 'Nunca';
 
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _dataRow('Tipo de transporte', isNearby ? 'NearbyTransport (P2P)' : transport.runtimeType.toString()),
+          _dataRow('Tipo de transporte', nearby != null ? 'NearbyTransport (P2P)' : transport.runtimeType.toString()),
           _dataRow('Estado', _transportLabel(controller.transportState)),
           _dataRow('Alcance', _reachLabel(transport.reach)),
           _dataRow('Peers P2P conectados', '${peerIds.length}'),
+          if (nearby != null) ...[
+            _dataRow('Reconexiones', '${nearby.reconnectionCount}'),
+            _dataRow('Invitaciones pendientes', '${nearby.pendingInvitationsCount}'),
+            _dataRow('Último peer visto', lastSeenLabel),
+          ],
           if (peerIds.isNotEmpty) ...[
             const SizedBox(height: 8),
             const Text('Peer IDs (dispositivos Nearby):',
@@ -464,6 +468,12 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
                   ),
                 )),
           ],
+          if (nearby != null && nearby.reconnectionCount > 6)
+            _statusBanner(
+              icon: Icons.info_outline,
+              color: const Color(0xFFEF9F27),
+              text: 'Muchas reconexiones. Prueba desactivar WiFi del router para que Nearby use mejor el mesh local.',
+            ),
           _dataRow('Switch BT', _btEnabled ? '✅ ON' : '❌ OFF'),
           _dataRow('Switch WiFi Direct', _wifiDirectEnabled ? '✅ ON' : '❌ OFF'),
         ],

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_nearby_connections_plus/flutter_nearby_connections_plus.dart';
@@ -25,9 +26,17 @@ class NearbyTransport implements TransportService {
   final _stateCtrl = StreamController<TransportState>.broadcast();
   final _incomingCtrl = StreamController<String>.broadcast();
   final _nearby = NearbyService();
+  final _random = Random();
 
   TransportState _state = TransportState.idle;
   String? _selfId;
+
+  final Map<String, Timer> _inviteTimers = {};
+  final Set<String> _pendingInvitations = {};
+  Timer? _reAdvertiseTimer;
+  int _reconnectionCount = 0;
+  int _currentBackoffMillis = 500;
+  DateTime? _lastPeerSeenAt;
 
   StreamSubscription? _stateSub;
   StreamSubscription? _dataSub;
@@ -38,6 +47,10 @@ class NearbyTransport implements TransportService {
   /// Getter público para que la consola de desarrollo pueda mostrar
   /// los peers P2P conectados. Devuelve una copia inmutable.
   Set<String> get connectedPeerIds => Set.unmodifiable(_connectedPeers);
+
+  int get reconnectionCount => _reconnectionCount;
+  int get pendingInvitationsCount => _pendingInvitations.length;
+  DateTime? get lastPeerSeenAt => _lastPeerSeenAt;
 
   @override
   Stream<TransportState> get stateStream => _stateCtrl.stream;
@@ -56,6 +69,62 @@ class NearbyTransport implements TransportService {
   void _setState(TransportState s) {
     _state = s;
     if (!_stateCtrl.isClosed) _stateCtrl.add(s);
+  }
+
+  void _resetBackoff() {
+    _currentBackoffMillis = 500;
+  }
+
+  void _cancelInviteTimer(String deviceId) {
+    _inviteTimers.remove(deviceId)?.cancel();
+    _pendingInvitations.remove(deviceId);
+  }
+
+  void _queueReconnect(String deviceId, String deviceName) {
+    if (_inviteTimers.containsKey(deviceId)) return;
+    _reconnectionCount++;
+    final delayMillis = min(15000, _currentBackoffMillis + _random.nextInt(1500));
+    debugPrint('NearbyTransport: agendando reconexión a $deviceId en ${delayMillis}ms');
+    _pendingInvitations.add(deviceId);
+    _inviteTimers[deviceId] = Timer(Duration(milliseconds: delayMillis), () async {
+      _inviteTimers.remove(deviceId);
+      if (_connectedPeers.contains(deviceId)) {
+        _pendingInvitations.remove(deviceId);
+        return;
+      }
+      await _attemptInvite(deviceId, deviceName);
+    });
+    _currentBackoffMillis = min(15000, max(500, _currentBackoffMillis * 2));
+  }
+
+  Future<void> _attemptInvite(String deviceId, String deviceName) async {
+    if (_state == TransportState.idle || _state == TransportState.error) return;
+    try {
+      debugPrint('NearbyTransport: invitando a $deviceId');
+      await _nearby.invitePeer(deviceID: deviceId, deviceName: deviceName);
+    } catch (e) {
+      debugPrint('NearbyTransport: fallo al invitar a $deviceId: $e');
+      if (!_connectedPeers.contains(deviceId)) {
+        _queueReconnect(deviceId, deviceName);
+      }
+    }
+  }
+
+  void _startReadvertiseTimer() {
+    _reAdvertiseTimer?.cancel();
+    _reAdvertiseTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _refreshAdvertising();
+    });
+  }
+
+  Future<void> _refreshAdvertising() async {
+    try {
+      await _nearby.stopAdvertisingPeer();
+      await _nearby.startAdvertisingPeer();
+      debugPrint('NearbyTransport: advertising refrescado');
+    } catch (e) {
+      debugPrint('NearbyTransport: no se pudo refrescar advertising: $e');
+    }
   }
 
   @override
@@ -80,6 +149,7 @@ class NearbyTransport implements TransportService {
             await _nearby.stopBrowsingForPeers();
             await _nearby.startAdvertisingPeer();
             await _nearby.startBrowsingForPeers();
+            _startReadvertiseTimer();
             debugPrint('NearbyTransport: Advertising y browsing iniciados');
           }
         },
@@ -91,14 +161,21 @@ class NearbyTransport implements TransportService {
           switch (d.state) {
             case SessionState.notConnected:
               _connectedPeers.remove(d.deviceId);
+              _cancelInviteTimer(d.deviceId);
+              _lastPeerSeenAt = DateTime.now();
               if (d.deviceId != selfId) {
-                _nearby.invitePeer(deviceID: d.deviceId, deviceName: d.deviceName);
+                _queueReconnect(d.deviceId, d.deviceName);
               }
               break;
             case SessionState.connecting:
+              _lastPeerSeenAt = DateTime.now();
               break;
             case SessionState.connected:
               _connectedPeers.add(d.deviceId);
+              _cancelInviteTimer(d.deviceId);
+              _pendingInvitations.remove(d.deviceId);
+              _resetBackoff();
+              _lastPeerSeenAt = DateTime.now();
               debugPrint('NearbyTransport: Connected to ${d.deviceId}');
               break;
           }
@@ -107,6 +184,7 @@ class NearbyTransport implements TransportService {
       });
 
       _dataSub = _nearby.dataReceivedSubscription(callback: (data) {
+        _lastPeerSeenAt = DateTime.now();
         debugPrint('NearbyTransport: Data received: ${data['message']}');
         try {
           final parsed = jsonDecode(data['message'] as String) as Map<String, dynamic>;
@@ -162,6 +240,13 @@ class NearbyTransport implements TransportService {
     await _dataSub?.cancel();
     _stateSub = null;
     _dataSub = null;
+    _reAdvertiseTimer?.cancel();
+    _reAdvertiseTimer = null;
+    for (final timer in _inviteTimers.values) {
+      timer.cancel();
+    }
+    _inviteTimers.clear();
+    _pendingInvitations.clear();
     try {
       await _nearby.stopAdvertisingPeer();
       await _nearby.stopBrowsingForPeers();

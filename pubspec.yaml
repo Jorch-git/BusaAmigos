@@ -43,6 +43,7 @@ dependencies:
   collection: ^1.18.0
   vector_math: ^2.1.4
   flutter_nearby_connections_plus: ^1.2.2
+  wakelock_plus: ^1.4.0
 
 dev_dependencies:
   flutter_test:
