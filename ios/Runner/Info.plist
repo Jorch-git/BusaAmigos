@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Buscamigos</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>buscamigos</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+
+	<!-- Localización: necesaria para saber dónde estás y dónde están tus amigos -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Buscamigos necesita tu ubicación para mostrarte dónde están los demás miembros del grupo en el radar.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Para que sigas apareciendo en el radar de tus amigos cuando la app esté en segundo plano.</string>
+
+	<!-- Bluetooth: usado tanto para distancia fina (BLE RSSI) como para
+	     MultipeerConnectivity en iOS cuando no hay internet. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Buscamigos usa Bluetooth para encontrar a tus amigos cerca cuando no hay buena señal de internet.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Buscamigos anuncia tu presencia por Bluetooth para que tus amigos te encuentren sin internet.</string>
+
+	<!-- Cámara: para escanear el QR del código de grupo -->
+	<key>NSCameraUsageDescription</key>
+	<string>Buscamigos usa la cámara para escanear el código QR de un grupo y unirte rápido.</string>
+
+	<!-- Red local: necesaria para MultipeerConnectivity / Bonjour
+	     (transporte P2P en iOS). En iOS 14+ se requiere autorización explícita. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Buscamigos usa la red local para descubrir a tus amigos cercanos sin necesidad de internet.</string>
+
+	<!-- Servicios Bonjour que la app anunciará/buscará. El nombre debe coincidir
+	     con el serviceType usado por flutter_nearby_connections en iOS. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_buscamigos._tcp</string>
+		<string>_buscamigos._udp</string>
+	</array>
+
+	<!-- Background modes: necesario para que las posiciones sigan llegando
+	     mientras la app está minimizada (ej. usuario revisando otra app
+	     en el festival). Solo location y bluetooth-central; nada agresivo. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
+</dict>
+</plist>

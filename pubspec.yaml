@@ -1,0 +1,53 @@
+name: buscamigos
+description: "Encuentra a tu grupo en festivales, conciertos y eventos masivos."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Estado
+  provider: ^6.1.2
+
+  # Persistencia local (clave-valor rápido, todo el grupo cabe aquí)
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  path_provider: ^2.1.5
+
+  # Localización + brújula
+  geolocator: ^13.0.2
+  flutter_compass: ^0.8.1
+  permission_handler: ^11.3.1
+
+  # Bluetooth para distancia fina cuando hay miembros cerca
+  flutter_blue_plus: ^1.34.5
+
+  # Transporte P2P (fallback cuando no hay internet)
+  # Funciona Android nativo + iOS via MultipeerConnectivity
+
+  # Crypto E2E. Dart puro, sin compilación nativa, mantenido.
+  cryptography: ^2.7.0
+  cryptography_flutter: ^2.3.2  # acelera AES en plataformas que lo soportan
+
+  # QR para crear/unirse
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.3
+
+  # Utilidades
+  uuid: ^4.5.1
+  collection: ^1.18.0
+  vector_math: ^2.1.4
+  flutter_nearby_connections_plus: ^1.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
