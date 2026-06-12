@@ -1,31 +1,47 @@
 /// Representa la posición conocida de un miembro.
 ///
-/// Hay dos fuentes posibles:
-///  - GPS real (lat/lng + accuracy): la fuente principal cuando hay señal.
-///  - RSSI BLE (rssiDistance): fallback cuando solo nos llegamos por mesh
-///    local sin GPS, o complemento para refinar a corta distancia.
+/// Fuentes posibles:
+///  - GPS real (lat/lng + accuracy): la principal cuando hay señal.
+///  - RSSI BLE (rssiDistance): fallback a corta distancia.
+///  - Dead reckoning (drNorth/drEast aplicados sobre el último GPS): rellena
+///    huecos cuando el GPS se pierde.
 ///
-/// Si las dos están disponibles, [GroupController] elige la de menor error
-/// estimado (típicamente GPS pasados los ~5 m, RSSI por debajo).
+/// Esta versión añade campos de MOVIMIENTO derivados de la fusión de sensores
+/// (rumbo fusionado, confianza, inclinación, pasos, cadencia, estado). Todos
+/// son opcionales y se serializan con claves cortas para minimizar datos.
 class Position {
-  /// Coordenadas geográficas. `null` si solo tenemos RSSI.
   final double? latitude;
   final double? longitude;
-
-  /// Precisión horizontal del GPS en metros. Cuanto menor, mejor.
   final double? accuracy;
 
-  /// Rumbo del miembro en grados (0 = norte, 90 = este). Solo cuando se mueve.
+  /// Rumbo del miembro en grados (0=N, 90=E). Ahora es el rumbo FUSIONADO
+  /// (giroscopio+magnetómetro), no el crudo del GPS.
   final double? heading;
 
-  /// Distancia estimada por RSSI BLE en metros. `null` si no hay medición.
   final double? rssiDistance;
-
-  /// RSSI bruto de la última medición BLE, en dBm. Útil para calidad.
   final int? rssi;
-
-  /// Cuándo se midió esta posición.
   final DateTime timestamp;
+
+  // ---- Datos de fusión (nuevos) ----
+
+  /// Confianza del rumbo [0..1].
+  final double? headingConfidence;
+
+  /// Inclinación del teléfono respecto a la horizontal (grados).
+  final double? tilt;
+
+  /// Pasos contados en la sesión.
+  final int? steps;
+
+  /// Cadencia (pasos/min).
+  final double? cadence;
+
+  /// Estado de movimiento: still/walking/running/unknown.
+  final String? motion;
+
+  /// Si la posición fue propagada por dead reckoning desde el último GPS
+  /// (sin fix nuevo). La UI puede marcarla como menos confiable.
+  final bool deadReckoned;
 
   const Position({
     this.latitude,
@@ -35,15 +51,18 @@ class Position {
     this.rssiDistance,
     this.rssi,
     required this.timestamp,
+    this.headingConfidence,
+    this.tilt,
+    this.steps,
+    this.cadence,
+    this.motion,
+    this.deadReckoned = false,
   });
 
   bool get hasGps => latitude != null && longitude != null;
   bool get hasRssi => rssiDistance != null;
 
-  /// Tiempo transcurrido desde la última medición.
   Duration get age => DateTime.now().difference(timestamp);
-
-  /// Considera la posición "fresca" si tiene menos de 30 s.
   bool get isFresh => age.inSeconds < 30;
 
   Map<String, dynamic> toJson() => {
@@ -53,6 +72,12 @@ class Position {
         if (heading != null) 'hdg': heading,
         if (rssiDistance != null) 'rd': rssiDistance,
         if (rssi != null) 'rssi': rssi,
+        if (headingConfidence != null) 'hc': headingConfidence,
+        if (tilt != null) 'tilt': tilt,
+        if (steps != null) 'st': steps,
+        if (cadence != null) 'cad': cadence,
+        if (motion != null) 'mo': motion,
+        if (deadReckoned) 'dr': true,
         'ts': timestamp.toUtc().toIso8601String(),
       };
 
@@ -63,6 +88,12 @@ class Position {
         heading: (json['hdg'] as num?)?.toDouble(),
         rssiDistance: (json['rd'] as num?)?.toDouble(),
         rssi: json['rssi'] as int?,
+        headingConfidence: (json['hc'] as num?)?.toDouble(),
+        tilt: (json['tilt'] as num?)?.toDouble(),
+        steps: (json['st'] as num?)?.toInt(),
+        cadence: (json['cad'] as num?)?.toDouble(),
+        motion: json['mo'] as String?,
+        deadReckoned: (json['dr'] as bool?) ?? false,
         timestamp: DateTime.parse(json['ts'] as String),
       );
 
@@ -74,6 +105,12 @@ class Position {
     double? rssiDistance,
     int? rssi,
     DateTime? timestamp,
+    double? headingConfidence,
+    double? tilt,
+    int? steps,
+    double? cadence,
+    String? motion,
+    bool? deadReckoned,
   }) {
     return Position(
       latitude: latitude ?? this.latitude,
@@ -83,6 +120,12 @@ class Position {
       rssiDistance: rssiDistance ?? this.rssiDistance,
       rssi: rssi ?? this.rssi,
       timestamp: timestamp ?? this.timestamp,
+      headingConfidence: headingConfidence ?? this.headingConfidence,
+      tilt: tilt ?? this.tilt,
+      steps: steps ?? this.steps,
+      cadence: cadence ?? this.cadence,
+      motion: motion ?? this.motion,
+      deadReckoned: deadReckoned ?? this.deadReckoned,
     );
   }
 }

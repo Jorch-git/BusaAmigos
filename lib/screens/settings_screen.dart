@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../config/theme/app_theme.dart';
 import '../services/group_controller.dart';
+import '../services/logging/event_log_service.dart';
+import 'event_log_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -10,6 +12,7 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<GroupController>();
+    final log = context.watch<EventLogService>();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Configuración')),
@@ -33,6 +36,15 @@ class SettingsScreen extends StatelessWidget {
             _section('Ahorro de batería', icon: Icons.battery_saver),
             _row('Modo de energía', trailing: 'Balanceado'),
             _row('Escaneo Bluetooth', trailing: 'Normal'),
+            _section('Desarrollo', icon: Icons.bug_report_outlined),
+            _row(
+              'Registro de la sesión',
+              trailing: '${log.count} eventos',
+              trailingColor: AppTheme.accentGreen,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const EventLogScreen()),
+              ),
+            ),
           ],
         ),
       ),
@@ -57,8 +69,8 @@ class SettingsScreen extends StatelessWidget {
   }
 
   Widget _row(String title,
-      {required String trailing, Color? trailingColor}) {
-    return Container(
+      {required String trailing, Color? trailingColor, VoidCallback? onTap}) {
+    final content = Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: Color(0xFF1A1A1C))),
@@ -79,5 +91,7 @@ class SettingsScreen extends StatelessWidget {
         ],
       ),
     );
+    if (onTap == null) return content;
+    return InkWell(onTap: onTap, child: content);
   }
 }

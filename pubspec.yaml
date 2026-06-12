@@ -14,7 +14,7 @@ dependencies:
   # Estado
   provider: ^6.1.2
 
-  # Persistencia local (clave-valor rápido, todo el grupo cabe aquí)
+  # Persistencia local
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   path_provider: ^2.1.5
@@ -24,19 +24,23 @@ dependencies:
   flutter_compass: ^0.8.1
   permission_handler: ^11.3.1
 
+  # Sensores inerciales (acelerómetro/giroscopio/magnetómetro) para la fusión
+  # de rumbo y el dead reckoning. NUEVO.
+  sensors_plus: ^7.0.0
+
   # Bluetooth para distancia fina cuando hay miembros cerca
   flutter_blue_plus: ^1.34.5
 
-  # Transporte P2P (fallback cuando no hay internet)
-  # Funciona Android nativo + iOS via MultipeerConnectivity
-
   # Crypto E2E. Dart puro, sin compilación nativa, mantenido.
   cryptography: ^2.7.0
-  cryptography_flutter: ^2.3.2  # acelera AES en plataformas que lo soportan
+  cryptography_flutter: ^2.3.2
 
   # QR para crear/unirse
   qr_flutter: ^4.1.0
   mobile_scanner: ^5.2.3
+
+  # Compartir el log exportado (JSON/CSV). NUEVO.
+  share_plus: ^11.0.0
 
   # Utilidades
   uuid: ^4.5.1
@@ -44,6 +48,12 @@ dependencies:
   vector_math: ^2.1.4
   flutter_nearby_connections_plus: ^1.2.2
   wakelock_plus: ^1.4.0
+
+  # --- OPCIONAL: transporte Bridgefy (mesh BLE + Wi-Fi Direct, cross-platform).
+  # Requiere API key (bridgefy.me). Descomenta esta línea Y copia
+  # opcional_bridgefy/bridgefy_transport.dart a lib/services/transport/bridgefy/
+  # para activarlo.
+  # bridgefy: ^1.1.10
 
 dev_dependencies:
   flutter_test:

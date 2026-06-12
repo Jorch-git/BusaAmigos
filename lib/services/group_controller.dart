@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -13,6 +14,10 @@ import 'crypto/group_code.dart';
 import 'crypto/group_crypto.dart';
 import 'group_storage.dart';
 import 'location/location_service.dart';
+import 'logging/event_log_service.dart';
+import 'sensors/beacon_config.dart';
+import 'sensors/sensor_fusion_service.dart';
+import 'transport/codec/payload_codec.dart';
 import 'transport/transport_message.dart';
 import 'transport/transport_service.dart';
 
@@ -28,11 +33,20 @@ class GroupController extends ChangeNotifier {
   final LocationService location;
   final TransportService transport;
   final GroupStorage storage;
+  final SensorFusionService sensors;
+  final EventLogService eventLog;
+
+  /// Config del beacon/sensores. Mutable: se puede ajustar en caliente desde
+  /// la Consola/Settings con [updateConfig].
+  BeaconConfig config;
 
   GroupController({
     required this.location,
     required this.transport,
     required this.storage,
+    required this.sensors,
+    required this.eventLog,
+    this.config = const BeaconConfig(),
   });
 
   SavedGroup? savedGroup;
@@ -44,6 +58,8 @@ class GroupController extends ChangeNotifier {
 
   GroupCrypto? _crypto;
   GroupCrypto? get crypto => _crypto;
+
+  PayloadCodec? _codec;
 
   final List<ChatMessage> _messages = [];
   List<ChatMessage> get messages => List.unmodifiable(_messages);
@@ -69,6 +85,7 @@ class GroupController extends ChangeNotifier {
   StreamSubscription? _stateSub;
   StreamSubscription? _posSub;
   StreamSubscription? _headingSub;
+  StreamSubscription? _motionSub;
   Timer? _heartbeatTimer;
   Timer? _staleCheckTimer;
   Timer? _helloTimer;
@@ -132,6 +149,19 @@ class GroupController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Ajusta la configuración del beacon/sensores en caliente.
+  void updateConfig(BeaconConfig newConfig) {
+    config = newConfig;
+    sensors.config = newConfig;
+    // Reprograma el beacon con el nuevo intervalo.
+    if (_heartbeatTimer != null) {
+      _heartbeatTimer!.cancel();
+      _heartbeatTimer = Timer.periodic(config.beaconInterval, (_) => _beacon());
+    }
+    eventLog.logSystem('Config actualizada', extra: newConfig.toJson());
+    notifyListeners();
+  }
+
   Future<Group> _bootstrap({
     required String code,
     required String groupName,
@@ -142,6 +172,7 @@ class GroupController extends ChangeNotifier {
   }) async {
     _selfId = selfId ?? _uuid.v4();
     _crypto = await GroupCrypto.deriveFromCode(code);
+    _codec = PayloadCodec(_crypto!);
 
     final self = Member(
       id: _selfId!,
@@ -164,14 +195,24 @@ class GroupController extends ChangeNotifier {
         ? GroupVerificationState.pending
         : GroupVerificationState.notRequired;
 
+    // Arranca GPS + brújula + fusión de sensores.
     await location.start();
+    sensors.config = config;
+    await sensors.start();
     await transport.start(groupCode: code, selfId: _selfId!);
+
+    eventLog.logSystem('Sesión iniciada', extra: {
+      'group': groupName,
+      'host': wasHost,
+      'beaconMs': config.beaconInterval.inMilliseconds,
+    });
 
     await Future.delayed(const Duration(seconds: 2));
 
     _stateSub = transport.stateStream.listen((s) {
       debugPrint('GroupController: Estado del transporte cambió a: $s');
       _transportState = s;
+      eventLog.logSystem('Transporte: ${s.name}');
 
       if (s == TransportState.connected && _group?.self != null) {
         Future.delayed(const Duration(milliseconds: 500), () {
@@ -189,8 +230,15 @@ class GroupController extends ChangeNotifier {
       _onSelfPositionChanged(pos);
     });
 
+    // El rumbo del SO (FlutterCompass) se inyecta como validación suave en la
+    // fusión; el rumbo principal lo calcula SensorFusionService.
     _headingSub = location.headingStream.listen((h) {
-      _selfHeading = h;
+      sensors.feedExternalHeading(h, weight: 0.05);
+    });
+
+    // El snapshot de movimiento refresca la flecha/radar y el "self heading".
+    _motionSub = sensors.snapshotStream.listen((snap) {
+      _selfHeading = snap.headingDeg;
       notifyListeners();
     });
 
@@ -198,24 +246,14 @@ class GroupController extends ChangeNotifier {
     await _send(_buildSelfHello());
     debugPrint('GroupController: Hello inicial enviado');
 
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      final pos = location.lastPosition;
-      if (pos != null) {
-        _send(PositionMessage(_selfId!, pos));
-      } else {
-        // Sin GPS aún: mandamos un Hello "vacío" como heartbeat para que
-        // los demás vean que seguimos online aunque no podamos pintarnos.
-        _send(_buildSelfHello());
-      }
-    });
+    // Beacon: emite posición fusionada al ritmo configurado (1 s por defecto).
+    _heartbeatTimer = Timer.periodic(config.beaconInterval, (_) => _beacon());
 
     _helloTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _send(_buildSelfHello());
     });
 
     _staleCheckTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      // Refresco la UI para que recalcule status (online/stale/offline) según
-      // la edad de lastSeenAt.
       notifyListeners();
     });
 
@@ -237,21 +275,74 @@ class GroupController extends ChangeNotifier {
     return _group!;
   }
 
-  /// Construye el Hello del miembro local INCLUYENDO su última posición
-  /// conocida. Esto es importante: si solo enviáramos id+nombre, los
-  /// receptores nos verían como "sin GPS" hasta el primer PositionMessage.
+  /// Un "tick" del beacon: construye la posición fusionada (GPS + sensores,
+  /// con dead reckoning si el GPS está viejo) y la difunde.
+  void _beacon() {
+    final pos = _fusedSelfPosition();
+    if (pos != null) {
+      _onSelfPositionChanged(pos);
+      if (_selfId != null) _send(PositionMessage(_selfId!, pos));
+    } else {
+      _send(_buildSelfHello());
+    }
+  }
+
+  /// Combina el último GPS con el snapshot de la fusión de sensores. Si el GPS
+  /// está fresco, lo usa tal cual (más rumbo/movimiento). Si está viejo,
+  /// propaga la posición por dead reckoning. Si no hay GPS, devuelve solo
+  /// movimiento (o null si includeMotion está apagado).
+  Position? _fusedSelfPosition() {
+    final snap = sensors.lastSnapshot;
+    final gps = location.lastPosition;
+
+    Position withMotion(Position p, {bool dr = false}) => p.copyWith(
+          heading: snap.headingDeg,
+          headingConfidence: snap.headingConfidence,
+          tilt: snap.tiltDeg,
+          steps: snap.stepCount,
+          cadence: snap.cadence,
+          motion: snap.motion.name,
+          deadReckoned: dr,
+          timestamp: DateTime.now(),
+        );
+
+    if (gps != null && gps.hasGps) {
+      final freshGps = DateTime.now().difference(gps.timestamp).inSeconds < 8;
+      if (freshGps) return withMotion(gps);
+
+      // GPS viejo -> propaga por dead reckoning desde el último fix.
+      const mPerDegLat = 111320.0;
+      final dLat = snap.drNorth / mPerDegLat;
+      final dLng = snap.drEast /
+          (mPerDegLat * math.cos(gps.latitude! * math.pi / 180));
+      return withMotion(
+        gps.copyWith(
+          latitude: gps.latitude! + dLat,
+          longitude: gps.longitude! + dLng,
+        ),
+        dr: true,
+      );
+    }
+
+    // Sin GPS: al menos compartimos rumbo/movimiento (sirve para la flecha).
+    if (config.includeMotion) {
+      return withMotion(Position(timestamp: DateTime.now()));
+    }
+    return null;
+  }
+
+  /// Construye el Hello del miembro local incluyendo su última posición.
   HelloMessage _buildSelfHello() {
     final selfMember = _group?.self;
     if (selfMember == null) {
-      // Caso muy temprano: aún no hay grupo. No debería pasar pero por las dudas.
       return HelloMessage(Member(
         id: _selfId ?? '',
         displayName: '',
         colorSeed: 0,
       ));
     }
-    // Refrescamos lastPosition con la más reciente del LocationService.
-    final freshPos = location.lastPosition ?? selfMember.lastPosition;
+    final freshPos =
+        _fusedSelfPosition() ?? location.lastPosition ?? selfMember.lastPosition;
     final m = selfMember.copyWith(lastPosition: freshPos);
     return HelloMessage(m);
   }
@@ -269,15 +360,20 @@ class GroupController extends ChangeNotifier {
     await _stateSub?.cancel();
     await _posSub?.cancel();
     await _headingSub?.cancel();
-    _incomingSub = _stateSub = _posSub = _headingSub = null;
+    await _motionSub?.cancel();
+    _incomingSub = _stateSub = _posSub = _headingSub = _motionSub = null;
     _heartbeatTimer = _staleCheckTimer = _helloTimer = null;
     _verificationTimer = _outboxTimer = null;
 
     await transport.stop();
     await location.stop();
+    await sensors.stop();
+
+    eventLog.logSystem('Sesión finalizada');
 
     _group = null;
     _crypto = null;
+    _codec = null;
     _messages.clear();
     _activeSos = null;
     _selfId = null;
@@ -373,10 +469,10 @@ class GroupController extends ChangeNotifier {
       return;
     }
 
-    final crypto = _crypto;
-    if (crypto == null) return;
+    final codec = _codec;
+    if (codec == null) return;
 
-    final payload = await crypto.decryptJson(blob);
+    final payload = await codec.decode(blob);
     if (payload == null) return;
 
     final TransportMessage msg;
@@ -387,18 +483,30 @@ class GroupController extends ChangeNotifier {
       return;
     }
 
-    // CUALQUIER mensaje válido del miembro lo "toca" (= lo marca como visto
-    // ahora). Esto es lo que hace que un peer aparezca como online en cuanto
-    // chatea, aunque no haya mandado posición todavía.
     late final String sourceMemberId;
     switch (msg) {
-      case HelloMessage():       sourceMemberId = msg.member.id;
-      case PositionMessage():    sourceMemberId = msg.memberId;
+      case HelloMessage():        sourceMemberId = msg.member.id;
+      case PositionMessage():     sourceMemberId = msg.memberId;
       case ChatMessageEnvelope(): sourceMemberId = msg.message.senderId;
-      case SosMessage():         sourceMemberId = msg.alert.triggeredBy;
-      case SosResponseMessage(): sourceMemberId = msg.memberId;
-      case LeaveMessage():       sourceMemberId = msg.memberId;
+      case SosMessage():          sourceMemberId = msg.alert.triggeredBy;
+      case SosResponseMessage():  sourceMemberId = msg.memberId;
+      case LeaveMessage():        sourceMemberId = msg.memberId;
     }
+
+    // Log del evento entrante (ya descifrado y descomprimido = legible).
+    final senderName = _group?.members
+        .where((m) => m.id == sourceMemberId)
+        .firstOrNull
+        ?.displayName;
+    eventLog.logReceived(
+      type: payload['type'] as String? ?? 'unknown',
+      payload: payload,
+      memberId: sourceMemberId,
+      memberName: senderName,
+      wireBytes: blob.length,
+      transport: transport.runtimeType.toString(),
+    );
+
     if (sourceMemberId != _selfId) {
       _touchMember(sourceMemberId);
     }
@@ -419,16 +527,12 @@ class GroupController extends ChangeNotifier {
     }
   }
 
-  /// Marca a un miembro existente como "visto ahora". Si no existe lo crea
-  /// como Desconocido (su Hello debería llegar después y rellenar el nombre).
   void _touchMember(String memberId) {
     if (_group == null) return;
     final existing = _group!.members.where((m) => m.id == memberId).firstOrNull;
     if (existing != null) {
       _group = _group!.withMember(existing.touched());
     } else {
-      // Nuevo miembro detectado por mensaje no-Hello: lo creamos con
-      // marcador "Desconocido" hasta que llegue su Hello.
       _group = _group!.withMember(Member(
         id: memberId,
         displayName: 'Desconocido',
@@ -437,7 +541,6 @@ class GroupController extends ChangeNotifier {
       ));
     }
 
-    // Verificación física: cualquier mensaje válido es prueba de proximidad.
     if (_verificationState == GroupVerificationState.pending) {
       _verificationState = GroupVerificationState.confirmed;
       _verificationTimer?.cancel();
@@ -484,6 +587,12 @@ class GroupController extends ChangeNotifier {
 
   void _onSelfPositionChanged(Position pos) {
     if (_group == null) return;
+
+    // Anclaje del dead reckoning cuando llega un GPS confiable.
+    if (pos.hasGps && (pos.accuracy ?? 999) <= config.gpsAnchorAccuracy && !pos.deadReckoned) {
+      sensors.anchorToGps();
+    }
+
     final self = _group!.self;
     if (self == null) return;
     _group = _group!.withMember(self.copyWith(
@@ -493,28 +602,20 @@ class GroupController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Procesa un Hello entrante. CRÍTICO: si el Hello viene SIN posición pero
-  /// nosotros ya teníamos una posición previa para ese miembro, NO la pisamos.
   void _onMemberHello(Member m) {
     if (_group == null || m.id == _selfId) return;
 
-    // ¿Ya conocíamos a este miembro?
     final existing = _group!.members.where((x) => x.id == m.id).firstOrNull;
 
     final Member merged;
     if (existing == null) {
-      // Nuevo miembro. Lo agregamos con su posición (si la trae) y lastSeenAt=now.
       merged = m.copyWith(
         isSelf: false,
         lastSeenAt: DateTime.now(),
       );
     } else {
-      // Miembro conocido. Actualizamos nombre/colorSeed por si cambió,
-      // PRESERVAMOS la posición existente si el Hello no trae una nueva,
-      // y marcamos visto.
       merged = existing.copyWith(
         displayName: m.displayName,
-        // Si el Hello trae posición, usamos esa; si no, conservamos la previa.
         lastPosition: m.lastPosition ?? existing.lastPosition,
         lastSeenAt: DateTime.now(),
       );
@@ -525,8 +626,6 @@ class GroupController extends ChangeNotifier {
 
     notifyListeners();
 
-    // Le contestamos con NUESTRO hello (con nuestra posición actual) para
-    // que él también nos vea con coordenadas, no solo como id.
     _send(_buildSelfHello());
   }
 
@@ -587,25 +686,41 @@ class GroupController extends ChangeNotifier {
   // ---- Cola de reenvío ----
 
   Future<void> _send(TransportMessage msg, {bool persistent = false}) async {
-    final crypto = _crypto;
-    if (crypto == null) return;
+    final codec = _codec;
+    if (codec == null) return;
 
     try {
-      final blob = await crypto.encryptJson(msg.toJson());
+      final json = msg.toJson();
+      final enc = await codec.encode(
+        json,
+        forceCompress: config.compress ? null : false,
+      );
+
+      // Registro del evento saliente con métricas de tamaño/compresión.
+      eventLog.logSent(
+        type: json['type'] as String? ?? msg.runtimeType.toString(),
+        payload: json,
+        memberId: _selfId,
+        memberName: _group?.self?.displayName,
+        rawBytes: enc.rawBytes,
+        wireBytes: enc.wireBytes,
+        compressed: enc.wasCompressed,
+        transport: transport.runtimeType.toString(),
+      );
 
       if (persistent && _transportState != TransportState.connected) {
-        _outbox.add(_PendingMessage(blob, DateTime.now(), msg.runtimeType.toString()));
+        _outbox.add(_PendingMessage(enc.blob, DateTime.now(), msg.runtimeType.toString()));
         notifyListeners();
         return;
       }
 
-      await transport.send(blob);
+      await transport.send(enc.blob);
     } catch (e) {
       debugPrint('GroupController: error enviando ${msg.runtimeType}: $e');
       if (persistent) {
         try {
-          final blob = await crypto.encryptJson(msg.toJson());
-          _outbox.add(_PendingMessage(blob, DateTime.now(), msg.runtimeType.toString()));
+          final enc = await codec.encode(msg.toJson());
+          _outbox.add(_PendingMessage(enc.blob, DateTime.now(), msg.runtimeType.toString()));
           notifyListeners();
         } catch (_) {}
       }
@@ -663,11 +778,14 @@ class GroupController extends ChangeNotifier {
     return palette[h % palette.length];
   }
 
+  /// Distancia en metros (Haversine simplificada). Corrige el bug previo:
+  /// ahora SÍ saca la raíz (antes devolvía metros al cuadrado).
   double _quickDistance(double lat1, double lng1, double lat2, double lng2) {
     const earthRadius = 6371000.0;
-    final x = (lng2 - lng1) * 3.14159 / 180 * (earthRadius * 0.9986);
-    final y = (lat2 - lat1) * 3.14159 / 180 * earthRadius;
-    return (x * x + y * y).abs();
+    final x = (lng2 - lng1) * math.pi / 180 * (earthRadius * 0.9986) *
+        math.cos((lat1 + lat2) / 2 * math.pi / 180);
+    final y = (lat2 - lat1) * math.pi / 180 * earthRadius;
+    return math.sqrt(x * x + y * y);
   }
 
   @override
