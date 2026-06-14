@@ -20,20 +20,36 @@ class _ChatScreenState extends State<ChatScreen> {
   /// aparece una barra de cita encima del input.
   ChatMessage? _replyingTo;
 
+  /// Referencia guardada al controller. La obtenemos en
+  /// didChangeDependencies (cuando el widget está montado y es seguro usar
+  /// el context) y la usamos en dispose(), donde ya NO es seguro llamar
+  /// context.read(). Esto evita el error "Looking up a deactivated widget's
+  /// ancestor is unsafe".
+  GroupController? _controller;
+
   @override
   void initState() {
     super.initState();
     // Marcar el chat como abierto cuando se monta, para resetear el badge
     // y silenciar notificaciones mientras el usuario lo está viendo.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<GroupController>().setChatOpen(true);
+      if (!mounted) return;
+      _controller?.setChatOpen(true);
     });
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Guardamos la referencia al controller aquí, donde el context es válido.
+    _controller = Provider.of<GroupController>(context, listen: false);
+  }
+
+  @override
   void dispose() {
-    // Marcar como cerrado al salir.
-    context.read<GroupController>().setChatOpen(false);
+    // Usamos la referencia guardada, NO context.read (el widget ya está
+    // desmontado en este punto y el lookup por context sería inseguro).
+    _controller?.setChatOpen(false);
     _ctrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -61,13 +77,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final controller = context.watch<GroupController>();
     final group = controller.group;
     if (group == null) return const SizedBox();
-
-    // Asegurar que el badge quede en cero mientras el chat está visible.
-    if (controller.unreadCount != 0) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        controller.markChatRead();
-      });
-    }
 
     return Column(
       children: [

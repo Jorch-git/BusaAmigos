@@ -1,4 +1,3 @@
-import 'package:sensors_plus/sensors_plus.dart';
 
 /// Parámetros ajustables del beacon y del muestreo de sensores. Pensado para
 /// exponerse en la Consola/Settings y permitir afinado fino durante el
@@ -39,7 +38,7 @@ class BeaconConfig {
 
   const BeaconConfig({
     this.beaconInterval = const Duration(seconds: 1),
-    this.sensorSamplingPeriod = SensorInterval.gameInterval,
+    this.sensorSamplingPeriod = const Duration(milliseconds: 20),
     this.useFixedStride = false,
     this.fixedStrideMeters = 0.75,
     this.compress = true,

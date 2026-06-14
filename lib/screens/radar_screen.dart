@@ -15,6 +15,7 @@ import 'chat_screen.dart';
 import 'compass_screen.dart';
 import 'console_screen.dart';
 import 'group_screen.dart';
+import 'map_screen.dart';
 import 'sos_screen.dart';
 
 /// La pantalla central. Cuatro pestañas: Radar, Chat, Grupo, Consola.
@@ -78,6 +79,7 @@ class _RadarScreenState extends State<RadarScreen> {
 
     final pages = [
       _buildRadarTab(controller),
+      const MapScreen(),
       const ChatScreen(),
       const GroupScreen(),
       const ConsoleScreen(),
@@ -95,6 +97,8 @@ class _RadarScreenState extends State<RadarScreen> {
         items: [
           const BottomNavigationBarItem(
               icon: Icon(Icons.radar), label: 'Radar'),
+          const BottomNavigationBarItem(
+              icon: Icon(Icons.map_outlined), label: 'Mapa'),
           BottomNavigationBarItem(
             icon: _ChatIconWithBadge(unread: controller.unreadCount),
             label: 'Chat',

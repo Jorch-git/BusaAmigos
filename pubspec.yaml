@@ -40,8 +40,8 @@ dependencies:
   collection: ^1.18.0
   vector_math: ^2.1.4
   flutter_nearby_connections_plus: ^1.2.2
-  sensors_plus: 6.0.0
-  share_plus: 12.0.2
+  sensors_plus: ^6.0.0
+  share_plus: ^11.0.0
 
   # Mantener pantalla activa en Modo Búsqueda (wake lock)
   wakelock_plus: ^1.2.8
@@ -51,6 +51,11 @@ dependencies:
 
   # Foreground service: mantener app viva en segundo plano
   flutter_foreground_task: ^8.10.0
+
+  # Mapas OpenStreetMap (sin API key) + utilidades de coordenadas
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  http: ^1.2.2  # para descargar tiles del mapa
 
 dev_dependencies:
   flutter_test:

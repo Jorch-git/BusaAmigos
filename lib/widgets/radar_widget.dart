@@ -251,7 +251,7 @@ class _RadarPainter extends CustomPainter {
     tp.paint(canvas, point + Offset(-tp.width / 2, -28));
 
     if (distance.source != DistanceSource.none) {
-      final distText = '~${distance.meters.toStringAsFixed(0)}m';
+      final distText = distance.labelShort;
       tp.text = TextSpan(
         text: distText,
         style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),

@@ -261,8 +261,8 @@ class GroupScreen extends StatelessWidget {
     if (m.isSelf) return 'Tu posición';
     switch (m.status) {
       case MemberStatus.online:
-        if (r?.source == DistanceSource.gps) {
-          return 'Confirmado · ~${r!.meters.toStringAsFixed(0)} m';
+        if (r != null && !r.hasNoData) {
+          return 'Confirmado · ${r.label}';
         }
         return 'Confirmado';
       case MemberStatus.stale:

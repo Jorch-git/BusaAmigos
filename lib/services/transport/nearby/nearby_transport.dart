@@ -77,6 +77,7 @@ class NearbyTransport implements TransportService {
 
   void _cancelInviteTimer(String deviceId) {
     _inviteTimers.remove(deviceId)?.cancel();
+    _inviteTimers.remove('fallback_$deviceId')?.cancel();
     _pendingInvitations.remove(deviceId);
   }
 
@@ -99,6 +100,26 @@ class NearbyTransport implements TransportService {
 
   Future<void> _attemptInvite(String deviceId, String deviceName) async {
     if (_state == TransportState.idle || _state == TransportState.error) return;
+    if (_connectedPeers.contains(deviceId)) return;
+
+    // ---- REGLA ANTI-COLISIÓN ----
+    // Cuando dos dispositivos se descubren, AMBOS ven al otro como
+    // "notConnected" e intentan invitarse a la vez. En Nearby Connections esas
+    // invitaciones simétricas chocan y se rechazan, dejando la conexión
+    // atascada (el "se queda pensando"). La convención robusta: solo invita el
+    // dispositivo cuyo id es "menor" alfabéticamente; el otro espera y acepta.
+    // Como los ids son estables (DeviceIdentity), esta comparación es
+    // consistente entre ambos lados.
+    final me = _selfId ?? '';
+    if (me.compareTo(deviceId) > 0) {
+      // Nuestro id es "mayor": NO invitamos, esperamos a que el otro lo haga.
+      // Pero dejamos un reintento por si el otro nunca llega (red asimétrica):
+      // si tras un tiempo seguimos sin conectar, intentamos de todos modos.
+      debugPrint('NearbyTransport: $me espera invitación de $deviceId (id mayor no invita)');
+      _scheduleFallbackInvite(deviceId, deviceName);
+      return;
+    }
+
     try {
       debugPrint('NearbyTransport: invitando a $deviceId');
       await _nearby.invitePeer(deviceID: deviceId, deviceName: deviceName);
@@ -108,6 +129,28 @@ class NearbyTransport implements TransportService {
         _queueReconnect(deviceId, deviceName);
       }
     }
+  }
+
+  /// Si somos el lado "que espera" pero la invitación del otro no llega en
+  /// unos segundos, intentamos invitar nosotros como respaldo (cubre el caso
+  /// de que el otro lado tenga problemas y nunca invite).
+  void _scheduleFallbackInvite(String deviceId, String deviceName) {
+    if (_inviteTimers.containsKey('fallback_$deviceId')) return;
+    _inviteTimers['fallback_$deviceId'] = Timer(
+      Duration(milliseconds: 4000 + _random.nextInt(2000)),
+      () async {
+        _inviteTimers.remove('fallback_$deviceId');
+        if (_connectedPeers.contains(deviceId)) return;
+        if (_state == TransportState.idle || _state == TransportState.error) return;
+        try {
+          debugPrint('NearbyTransport: fallback, invitando a $deviceId de todos modos');
+          await _nearby.invitePeer(deviceID: deviceId, deviceName: deviceName);
+        } catch (e) {
+          debugPrint('NearbyTransport: fallback falló para $deviceId: $e');
+          _queueReconnect(deviceId, deviceName);
+        }
+      },
+    );
   }
 
   void _startReadvertiseTimer() {

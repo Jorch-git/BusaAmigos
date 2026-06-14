@@ -12,6 +12,7 @@ import '../models/position.dart';
 import '../models/sos_alert.dart';
 import 'crypto/group_code.dart';
 import 'crypto/group_crypto.dart';
+import 'device_identity.dart';
 import 'group_storage.dart';
 import 'location/location_service.dart';
 import 'logging/event_log_service.dart';
@@ -102,6 +103,7 @@ class GroupController extends ChangeNotifier {
   Timer? _heartbeatTimer;
   Timer? _staleCheckTimer;
   Timer? _helloTimer;
+  Timer? _fastHelloTimer;
   Timer? _verificationTimer;
   Timer? _outboxTimer;
 
@@ -116,12 +118,17 @@ class GroupController extends ChangeNotifier {
     required String myDisplayName,
   }) async {
     final code = GroupCode.generate();
+    // Usamos la identidad estable del dispositivo en vez de un UUID nuevo,
+    // para que al reconectarnos sigamos siendo el mismo miembro y no aparezca
+    // nuestro nombre duplicado.
+    final deviceId = await DeviceIdentity.instance.load();
     return _bootstrap(
       code: code,
       groupName: groupName,
       myDisplayName: myDisplayName,
       requireVerification: false,
       wasHost: true,
+      selfId: deviceId,
     );
   }
 
@@ -133,12 +140,15 @@ class GroupController extends ChangeNotifier {
     if (!GroupCode.isValid(code)) {
       throw ArgumentError('Código inválido');
     }
+    // Identidad estable del dispositivo (ver createGroup).
+    final deviceId = await DeviceIdentity.instance.load();
     return _bootstrap(
       code: GroupCode.normalize(code),
       groupName: 'Grupo',
       myDisplayName: myDisplayName,
       requireVerification: requireVerification,
       wasHost: false,
+      selfId: deviceId,
     );
   }
 
@@ -208,36 +218,23 @@ class GroupController extends ChangeNotifier {
         ? GroupVerificationState.pending
         : GroupVerificationState.notRequired;
 
-    // Arranca GPS + brújula + fusión de sensores.
-    await location.start();
-    sensors.config = config;
-    await sensors.start();
-    await transport.start(groupCode: code, selfId: _selfId!);
-
-    eventLog.logSystem('Sesión iniciada', extra: {
-      'group': groupName,
-      'host': wasHost,
-      'beaconMs': config.beaconInterval.inMilliseconds,
-    });
-
-    // Foreground service: mantiene la app viva en segundo plano para seguir
-    // recibiendo mensajes/SOS con la pantalla apagada.
-    await ForegroundKeepAlive.instance.start(
-      groupName: groupName,
-      memberCount: _group?.others.length ?? 0,
-    );
-
-    await Future.delayed(const Duration(seconds: 2));
+    // ---- ORDEN CRÍTICO ----
+    // Nos suscribimos a los streams del transporte ANTES de arrancarlo. Antes
+    // había un `await Future.delayed(2s)` entre arrancar el transporte y
+    // suscribirse, durante el cual los Hello entrantes del otro celular se
+    // PERDÍAN. Esa era la causa del "se queda pensando": si el primer
+    // intercambio de Hello caía en esa ventana ciega, la verificación física
+    // nunca se confirmaba. Suscribiendo primero, no se pierde ningún mensaje.
 
     _stateSub = transport.stateStream.listen((s) {
       debugPrint('GroupController: Estado del transporte cambió a: $s');
       _transportState = s;
       eventLog.logSystem('Transporte: ${s.name}');
 
+      // En cuanto el transporte queda conectado, mandamos Hello inmediatamente
+      // (sin esperar al timer) y vaciamos la cola pendiente.
       if (s == TransportState.connected && _group?.self != null) {
-        Future.delayed(const Duration(milliseconds: 500), () {
-          _send(_buildSelfHello());
-        });
+        _send(_buildSelfHello());
         _flushOutbox();
       }
 
@@ -250,25 +247,63 @@ class GroupController extends ChangeNotifier {
       _onSelfPositionChanged(pos);
     });
 
-    // El rumbo del SO (FlutterCompass) se inyecta como validación suave en la
-    // fusión; el rumbo principal lo calcula SensorFusionService.
     _headingSub = location.headingStream.listen((h) {
       sensors.feedExternalHeading(h, weight: 0.05);
     });
 
-    // El snapshot de movimiento refresca la flecha/radar y el "self heading".
     _motionSub = sensors.snapshotStream.listen((snap) {
       _selfHeading = snap.headingDeg;
       notifyListeners();
     });
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    // Ahora sí arrancamos los servicios. Los listeners ya están activos.
+    await location.start();
+    sensors.config = config;
+    await sensors.start();
+    await transport.start(groupCode: code, selfId: _selfId!);
+
+    eventLog.logSystem('Sesión iniciada', extra: {
+      'group': groupName,
+      'host': wasHost,
+      'beaconMs': config.beaconInterval.inMilliseconds,
+    });
+
+    await ForegroundKeepAlive.instance.start(
+      groupName: groupName,
+      memberCount: _group?.others.length ?? 0,
+    );
+
+    // Primer Hello inmediato (el transporte puede aún estar conectándose; no
+    // pasa nada, el reintento rápido de abajo cubre ese caso).
     await _send(_buildSelfHello());
     debugPrint('GroupController: Hello inicial enviado');
 
     // Beacon: emite posición fusionada al ritmo configurado (1 s por defecto).
     _heartbeatTimer = Timer.periodic(config.beaconInterval, (_) => _beacon());
 
+    // ---- REINTENTO RÁPIDO DE HELLO AL INICIO ----
+    // Durante los primeros segundos tras unirse, la sesión P2P (Nearby) puede
+    // tardar en establecerse. Reenviamos el Hello cada 2s hasta que la
+    // verificación se confirme (o hasta 12 intentos ~24s). Esto hace que la
+    // conexión "agarre" mucho más rápido y elimina el tener que cerrar y
+    // reabrir. Cuando ya no haga falta, este timer se cancela solo.
+    var fastTries = 0;
+    _fastHelloTimer = Timer.periodic(const Duration(seconds: 2), (t) {
+      fastTries++;
+      // Condición de parada: ya confirmamos verificación, ya hay otros
+      // miembros, o agotamos los intentos rápidos.
+      final confirmed = _verificationState == GroupVerificationState.confirmed ||
+          _verificationState == GroupVerificationState.notRequired;
+      final hasOthers = (_group?.others.isNotEmpty ?? false);
+      if (confirmed && hasOthers || fastTries >= 12) {
+        t.cancel();
+        _fastHelloTimer = null;
+        return;
+      }
+      _send(_buildSelfHello());
+    });
+
+    // Hello de mantenimiento a ritmo lento (para refrescar presencia).
     _helloTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _send(_buildSelfHello());
     });
@@ -376,6 +411,7 @@ class GroupController extends ChangeNotifier {
     _heartbeatTimer?.cancel();
     _staleCheckTimer?.cancel();
     _helloTimer?.cancel();
+    _fastHelloTimer?.cancel();
     _verificationTimer?.cancel();
     _outboxTimer?.cancel();
     await _incomingSub?.cancel();
@@ -385,7 +421,7 @@ class GroupController extends ChangeNotifier {
     await _motionSub?.cancel();
     _incomingSub = _stateSub = _posSub = _headingSub = _motionSub = null;
     _heartbeatTimer = _staleCheckTimer = _helloTimer = null;
-    _verificationTimer = _outboxTimer = null;
+    _fastHelloTimer = _verificationTimer = _outboxTimer = null;
 
     await transport.stop();
     await location.stop();
@@ -661,6 +697,24 @@ class GroupController extends ChangeNotifier {
     }
 
     _group = _group!.withMember(merged);
+
+    // Deduplicación defensiva: si quedó otro miembro con el MISMO nombre pero
+    // distinto id que ya no está online (stale/offline), es casi seguro un
+    // "fantasma" de una sesión anterior del mismo dispositivo (ej. usuarios
+    // que se unieron antes de tener identidad estable). Lo quitamos para que
+    // no se vea el nombre duplicado.
+    final ghosts = _group!.members.where((x) =>
+        x.id != merged.id &&
+        x.id != _selfId &&
+        !x.isSelf &&
+        x.displayName.trim().toLowerCase() ==
+            merged.displayName.trim().toLowerCase() &&
+        x.status != MemberStatus.online).toList();
+    for (final ghost in ghosts) {
+      debugPrint('GroupController: eliminando duplicado viejo de ${ghost.displayName} (id ${ghost.id})');
+      _group = _group!.withoutMember(ghost.id);
+    }
+
     debugPrint('GroupController: Hello procesado: ${merged.displayName} (pos=${merged.lastPosition?.hasGps == true})');
 
     notifyListeners();
@@ -726,16 +780,29 @@ class GroupController extends ChangeNotifier {
       _unreadCount = 0;
       NotificationService.instance.clearMessages();
     }
-    notifyListeners();
+    // Diferimos la notificación: este método se llama desde initState/dispose
+    // de ChatScreen, momentos en que el árbol de widgets puede estar bloqueado.
+    // Notificar de inmediato lanzaría "widget tree was locked".
+    _notifySafe();
   }
 
   /// Resetea el contador de no leídos sin cambiar el estado de chat abierto.
   void markChatRead() {
     if (_unreadCount != 0) {
       _unreadCount = 0;
-      notifyListeners();
+      _notifySafe();
     }
   }
+
+  /// Notifica a los listeners de forma diferida y segura. Evita el error
+  /// "setState() or markNeedsBuild() called when widget tree was locked".
+  void _notifySafe() {
+    Future.microtask(() {
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  bool _disposed = false;
 
   void _onSosTriggered(SosAlert alert) {
     final existing = _activeSos;
@@ -881,6 +948,7 @@ class GroupController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _sosIncomingCtrl.close();
     leaveGroup();
     super.dispose();

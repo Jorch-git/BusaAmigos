@@ -11,6 +11,7 @@ import 'services/location/location_service.dart';
 import 'services/logging/event_log_service.dart';
 import 'services/notifications/notification_service.dart';
 import 'services/notifications/foreground_service.dart';
+import 'services/map/tile_cache_service.dart';
 import 'services/sensors/beacon_config.dart';
 import 'services/sensors/sensor_fusion_service.dart';
 import 'services/transport/nearby/nearby_transport.dart';
@@ -29,6 +30,9 @@ Future<void> main() async {
   await NotificationService.instance.init();
   await NotificationService.instance.requestPermission();
   ForegroundKeepAlive.instance.init();
+
+  // Inicializa el caché de tiles del mapa (offline).
+  await TileCacheService.instance.init();
 
   const beaconConfig = BeaconConfig();
 

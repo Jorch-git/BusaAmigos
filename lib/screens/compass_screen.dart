@@ -113,9 +113,7 @@ class _CompassScreenState extends State<CompassScreen> {
         ? (result.bearing! - _userHeading + 360) % 360
         : 0.0;
 
-    final distanceText = result.source != DistanceSource.none
-        ? '~${result.meters.toStringAsFixed(0)} m'
-        : 'Sin posición';
+    final distanceText = result.label;
 
     final headingText = '${_userHeading.toStringAsFixed(0)}° ${_cardinalFromAngle(_userHeading)}';
     final bearingText = result.bearing != null
@@ -213,7 +211,8 @@ class _CompassScreenState extends State<CompassScreen> {
                       precisionText: precisionText,
                     ),
                     const SizedBox(height: 16),
-                    _buildDistanceCard(distanceText, result.errorMeters),
+                    _buildDistanceCard(distanceText, result.errorMeters,
+                        result.isVeryClose),
                   ],
                 ),
               ),
@@ -341,7 +340,13 @@ class _CompassScreenState extends State<CompassScreen> {
     );
   }
 
-  Widget _buildDistanceCard(String distanceText, double? errorMeters) {
+  Widget _buildDistanceCard(String distanceText, double? errorMeters,
+      bool isVeryClose) {
+    // Cuando están muy cerca, el subtítulo de error/precisión no aporta (el
+    // GPS no distingue a esa escala). Mostramos un mensaje útil en su lugar.
+    final subtitle = isVeryClose
+        ? '¡Ya casi! Mira a tu alrededor'
+        : 'Distancia estimada';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -359,8 +364,8 @@ class _CompassScreenState extends State<CompassScreen> {
                     style: const TextStyle(
                         fontSize: 30, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                const Text('Distancia estimada',
-                    style: TextStyle(color: AppTheme.textMuted)),
+                Text(subtitle,
+                    style: const TextStyle(color: AppTheme.textMuted)),
               ],
             ),
           ),
@@ -370,7 +375,11 @@ class _CompassScreenState extends State<CompassScreen> {
               color: _trendColor.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(_trendIcon, color: _trendColor, size: 22),
+            child: Icon(
+              isVeryClose ? Icons.my_location : _trendIcon,
+              color: isVeryClose ? AppTheme.accentGreen : _trendColor,
+              size: 22,
+            ),
           ),
         ],
       ),
