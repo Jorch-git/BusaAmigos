@@ -88,15 +88,21 @@ class _RadarScreenState extends State<RadarScreen> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _tabIndex,
         onTap: (i) => setState(() => _tabIndex = i),
-        backgroundColor: AppTheme.cardBg,
+        backgroundColor: AppTheme.cardBgOf(context),
         selectedItemColor: AppTheme.accentGreen,
-        unselectedItemColor: AppTheme.textMuted,
+        unselectedItemColor: AppTheme.textMutedOf(context),
         type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.radar), label: 'Radar'),
-          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
-          BottomNavigationBarItem(icon: Icon(Icons.group_outlined), label: 'Grupo'),
-          BottomNavigationBarItem(icon: Icon(Icons.developer_board), label: 'Consola'),
+        items: [
+          const BottomNavigationBarItem(
+              icon: Icon(Icons.radar), label: 'Radar'),
+          BottomNavigationBarItem(
+            icon: _ChatIconWithBadge(unread: controller.unreadCount),
+            label: 'Chat',
+          ),
+          const BottomNavigationBarItem(
+              icon: Icon(Icons.group_outlined), label: 'Grupo'),
+          const BottomNavigationBarItem(
+              icon: Icon(Icons.developer_board), label: 'Consola'),
         ],
       ),
     );
@@ -396,6 +402,49 @@ class _RadarScreenState extends State<RadarScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Icono de la pestaña Chat con un badge rojo que muestra el número de
+/// mensajes no leídos. Si no hay no leídos, muestra el icono normal.
+class _ChatIconWithBadge extends StatelessWidget {
+  final int unread;
+  const _ChatIconWithBadge({required this.unread});
+
+  @override
+  Widget build(BuildContext context) {
+    if (unread <= 0) {
+      return const Icon(Icons.chat_bubble_outline);
+    }
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        const Icon(Icons.chat_bubble),
+        Positioned(
+          right: -6,
+          top: -4,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+            decoration: BoxDecoration(
+              color: AppTheme.sosRed,
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: AppTheme.cardBgOf(context), width: 1.5),
+            ),
+            child: Text(
+              unread > 99 ? '99+' : '$unread',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                height: 1.2,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

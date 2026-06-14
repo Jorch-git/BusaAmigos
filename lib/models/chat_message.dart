@@ -13,6 +13,19 @@ class ChatMessage {
   /// checks tipo whatsapp del video (✓ / ✓✓).
   final bool delivered;
 
+  /// ---- Respuesta / cita (estilo WhatsApp) ----
+  /// Si este mensaje es una respuesta a otro, aquí va el id del mensaje
+  /// citado. `null` si no es respuesta.
+  final String? replyToId;
+
+  /// Copia del texto del mensaje citado (snapshot). Guardamos una copia para
+  /// no depender de que el mensaje original siga en memoria, y para poder
+  /// pintar la cita aunque el original se haya perdido en la red.
+  final String? replyToText;
+
+  /// Nombre del autor del mensaje citado.
+  final String? replyToSender;
+
   const ChatMessage({
     required this.id,
     required this.senderId,
@@ -21,7 +34,12 @@ class ChatMessage {
     required this.sentAt,
     this.fromSelf = false,
     this.delivered = false,
+    this.replyToId,
+    this.replyToText,
+    this.replyToSender,
   });
+
+  bool get isReply => replyToId != null;
 
   ChatMessage copyWith({bool? delivered}) => ChatMessage(
         id: id,
@@ -31,6 +49,9 @@ class ChatMessage {
         sentAt: sentAt,
         fromSelf: fromSelf,
         delivered: delivered ?? this.delivered,
+        replyToId: replyToId,
+        replyToText: replyToText,
+        replyToSender: replyToSender,
       );
 
   Map<String, dynamic> toJson() => {
@@ -39,6 +60,9 @@ class ChatMessage {
         'sname': senderName,
         'text': text,
         'ts': sentAt.toUtc().toIso8601String(),
+        if (replyToId != null) 'rid': replyToId,
+        if (replyToText != null) 'rtext': replyToText,
+        if (replyToSender != null) 'rsender': replyToSender,
       };
 
   factory ChatMessage.fromJson(
@@ -53,6 +77,9 @@ class ChatMessage {
         sentAt: DateTime.parse(json['ts'] as String),
         fromSelf: json['sid'] == selfId,
         delivered: true,
+        replyToId: json['rid'] as String?,
+        replyToText: json['rtext'] as String?,
+        replyToSender: json['rsender'] as String?,
       );
 }
 

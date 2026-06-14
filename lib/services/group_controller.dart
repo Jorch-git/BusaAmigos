@@ -15,6 +15,8 @@ import 'crypto/group_crypto.dart';
 import 'group_storage.dart';
 import 'location/location_service.dart';
 import 'logging/event_log_service.dart';
+import 'notifications/notification_service.dart';
+import 'notifications/foreground_service.dart';
 import 'sensors/beacon_config.dart';
 import 'sensors/sensor_fusion_service.dart';
 import 'transport/codec/payload_codec.dart';
@@ -63,6 +65,17 @@ class GroupController extends ChangeNotifier {
 
   final List<ChatMessage> _messages = [];
   List<ChatMessage> get messages => List.unmodifiable(_messages);
+
+  /// Cantidad de mensajes no leídos (para el badge en la pestaña Chat).
+  /// Se incrementa al recibir un mensaje ajeno mientras el chat NO está
+  /// abierto, y se resetea con [markChatRead].
+  int _unreadCount = 0;
+  int get unreadCount => _unreadCount;
+
+  /// `true` cuando el usuario está viendo la pestaña de Chat. Si está abierto,
+  /// los mensajes entrantes NO incrementan el badge ni disparan notificación.
+  bool _chatOpen = false;
+  bool get chatOpen => _chatOpen;
 
   SosAlert? _activeSos;
   SosAlert? get activeSos => _activeSos;
@@ -207,6 +220,13 @@ class GroupController extends ChangeNotifier {
       'beaconMs': config.beaconInterval.inMilliseconds,
     });
 
+    // Foreground service: mantiene la app viva en segundo plano para seguir
+    // recibiendo mensajes/SOS con la pantalla apagada.
+    await ForegroundKeepAlive.instance.start(
+      groupName: groupName,
+      memberCount: _group?.others.length ?? 0,
+    );
+
     await Future.delayed(const Duration(seconds: 2));
 
     _stateSub = transport.stateStream.listen((s) {
@@ -332,6 +352,8 @@ class GroupController extends ChangeNotifier {
   }
 
   /// Construye el Hello del miembro local incluyendo su última posición.
+  /// v8: incluye también el nombre del grupo, para que quien se una adopte
+  /// el nombre real en vez de quedarse con "Grupo".
   HelloMessage _buildSelfHello() {
     final selfMember = _group?.self;
     if (selfMember == null) {
@@ -344,7 +366,7 @@ class GroupController extends ChangeNotifier {
     final freshPos =
         _fusedSelfPosition() ?? location.lastPosition ?? selfMember.lastPosition;
     final m = selfMember.copyWith(lastPosition: freshPos);
-    return HelloMessage(m);
+    return HelloMessage(m, groupName: _group?.name);
   }
 
   Future<void> leaveGroup() async {
@@ -368,6 +390,7 @@ class GroupController extends ChangeNotifier {
     await transport.stop();
     await location.stop();
     await sensors.stop();
+    await ForegroundKeepAlive.instance.stop();
 
     eventLog.logSystem('Sesión finalizada');
 
@@ -377,6 +400,8 @@ class GroupController extends ChangeNotifier {
     _messages.clear();
     _activeSos = null;
     _selfId = null;
+    _unreadCount = 0;
+    _chatOpen = false;
     _verificationState = GroupVerificationState.notRequired;
     _outbox.clear();
     savedGroup = null;
@@ -395,7 +420,7 @@ class GroupController extends ChangeNotifier {
     await _send(_buildSelfHello());
   }
 
-  Future<void> sendChat(String text) async {
+  Future<void> sendChat(String text, {ChatMessage? replyTo}) async {
     if (_group == null || _selfId == null) return;
     final self = _group!.self!;
     final msg = ChatMessage(
@@ -406,6 +431,9 @@ class GroupController extends ChangeNotifier {
       sentAt: DateTime.now(),
       fromSelf: true,
       delivered: false,
+      replyToId: replyTo?.id,
+      replyToText: replyTo?.text,
+      replyToSender: replyTo?.senderName,
     );
     _messages.add(msg);
     notifyListeners();
@@ -513,7 +541,7 @@ class GroupController extends ChangeNotifier {
 
     switch (msg) {
       case HelloMessage():
-        _onMemberHello(msg.member);
+        _onMemberHello(msg.member, msg.groupName);
       case PositionMessage():
         _onMemberPosition(msg.memberId, msg.position);
       case ChatMessageEnvelope():
@@ -602,8 +630,19 @@ class GroupController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _onMemberHello(Member m) {
+  void _onMemberHello(Member m, [String? groupName]) {
     if (_group == null || m.id == _selfId) return;
+
+    // Adoptar el nombre real del grupo si el nuestro es el default "Grupo"
+    // y el anfitrión nos mandó uno. Esto corrige el bug de que quien se une
+    // veía "Grupo" en vez del nombre que puso el creador.
+    if (groupName != null &&
+        groupName.isNotEmpty &&
+        (_group!.name == 'Grupo' || _group!.name.isEmpty) &&
+        groupName != 'Grupo') {
+      _group = _group!.copyWith(name: groupName);
+      _persistGroupName();
+    }
 
     final existing = _group!.members.where((x) => x.id == m.id).firstOrNull;
 
@@ -629,6 +668,23 @@ class GroupController extends ChangeNotifier {
     _send(_buildSelfHello());
   }
 
+  /// Actualiza el nombre del grupo en almacenamiento (tras adoptarlo del host).
+  Future<void> _persistGroupName() async {
+    final saved = savedGroup;
+    if (saved == null || _group == null) return;
+    final updated = SavedGroup(
+      groupCode: saved.groupCode,
+      groupName: _group!.name,
+      displayName: saved.displayName,
+      selfId: saved.selfId,
+      wasHost: saved.wasHost,
+    );
+    savedGroup = updated;
+    try {
+      await storage.save(updated);
+    } catch (_) {}
+  }
+
   void _onMemberPosition(String memberId, Position pos) {
     if (_group == null || memberId == _selfId) return;
     final existing = _group!.members.where((m) => m.id == memberId).firstOrNull;
@@ -649,7 +705,36 @@ class GroupController extends ChangeNotifier {
     if (_messages.any((m) => m.id == msg.id)) return;
     _messages.add(msg);
     _messages.sort((a, b) => a.sentAt.compareTo(b.sentAt));
+
+    // Si el mensaje es de otro y el chat NO está abierto, incrementamos el
+    // badge de no leídos y disparamos notificación pop.
+    if (!msg.fromSelf && !_chatOpen) {
+      _unreadCount++;
+      NotificationService.instance.showMessage(
+        senderName: msg.senderName,
+        text: msg.text,
+      );
+    }
+
     notifyListeners();
+  }
+
+  /// Marca el chat como abierto/cerrado. Cuando se abre, resetea no leídos.
+  void setChatOpen(bool open) {
+    _chatOpen = open;
+    if (open) {
+      _unreadCount = 0;
+      NotificationService.instance.clearMessages();
+    }
+    notifyListeners();
+  }
+
+  /// Resetea el contador de no leídos sin cambiar el estado de chat abierto.
+  void markChatRead() {
+    if (_unreadCount != 0) {
+      _unreadCount = 0;
+      notifyListeners();
+    }
   }
 
   void _onSosTriggered(SosAlert alert) {
@@ -662,6 +747,12 @@ class GroupController extends ChangeNotifier {
     }
     _activeSos = alert;
     notifyListeners();
+    // Notificación pop de máxima prioridad (a menos que sea nuestro propio SOS).
+    if (alert.triggeredBy != _selfId) {
+      NotificationService.instance.showSos(
+        triggeredByName: alert.triggeredByName,
+      );
+    }
     if (!_sosIncomingCtrl.isClosed) {
       _sosIncomingCtrl.add(alert);
     }

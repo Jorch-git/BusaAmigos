@@ -26,18 +26,28 @@ sealed class TransportMessage {
 }
 
 /// Cuando un miembro entra al grupo, anuncia quién es.
+///
+/// v8: ahora lleva opcionalmente el [groupName]. El anfitrión incluye el
+/// nombre real del grupo en su Hello para que los que se unen (que arrancan
+/// con "Grupo" por default) adopten el nombre correcto. Ver
+/// GroupController._onMemberHello.
 class HelloMessage extends TransportMessage {
   final Member member;
-  const HelloMessage(this.member);
+  final String? groupName;
+
+  const HelloMessage(this.member, {this.groupName});
 
   @override
   Map<String, dynamic> toJson() => {
         'type': 'hello',
         'member': member.toJson(),
+        if (groupName != null) 'gname': groupName,
       };
 
-  factory HelloMessage._fromJson(Map<String, dynamic> json) =>
-      HelloMessage(Member.fromJson(json['member'] as Map<String, dynamic>));
+  factory HelloMessage._fromJson(Map<String, dynamic> json) => HelloMessage(
+        Member.fromJson(json['member'] as Map<String, dynamic>),
+        groupName: json['gname'] as String?,
+      );
 }
 
 /// Anuncio periódico de posición.
@@ -75,8 +85,6 @@ class ChatMessageEnvelope extends TransportMessage {
       ChatMessageEnvelope(
         ChatMessage.fromJson(
           json['msg'] as Map<String, dynamic>,
-          // El selfId no aplica en deserialización del transporte: lo
-          // resuelve el GroupController al integrar el mensaje.
           selfId: '',
         ),
       );

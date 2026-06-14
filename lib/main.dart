@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:provider/provider.dart';
 
 import 'config/theme/app_theme.dart';
+import 'config/theme/theme_controller.dart';
 import 'screens/home_screen.dart';
 import 'services/group_controller.dart';
 import 'services/group_storage.dart';
 import 'services/location/location_service.dart';
 import 'services/logging/event_log_service.dart';
+import 'services/notifications/notification_service.dart';
+import 'services/notifications/foreground_service.dart';
 import 'services/sensors/beacon_config.dart';
 import 'services/sensors/sensor_fusion_service.dart';
 import 'services/transport/nearby/nearby_transport.dart';
@@ -18,19 +22,19 @@ import 'services/transport/hybrid/hybrid_transport.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Config del beacon/sensores. beaconInterval = 1 s (ajustable en caliente).
+  // Necesario para que el foreground task pueda comunicarse con la UI.
+  FlutterForegroundTask.initCommunicationPort();
+
+  // Inicializa notificaciones locales y el servicio de foreground.
+  await NotificationService.instance.init();
+  await NotificationService.instance.requestPermission();
+  ForegroundKeepAlive.instance.init();
+
   const beaconConfig = BeaconConfig();
 
   // ---- Transporte: mesh multi-hop local sobre Nearby (gratis, offline) ----
-  // El mesh convierte el Nearby (solo peers directos) en una malla que reenvía
-  // de salto en salto. Perfil highDensity = pensado para multitudes.
   final nearby = NearbyTransport();
   final mesh = MeshTransport(nearby, profile: MeshProfile.highDensity);
-
-  // Relay OPCIONAL: tu propio servidor WebSocket para alcance global y cruce
-  // iOS<->Android cuando hay internet. Sin él, todo funciona en modo local.
-  // final relay = RelayTransport('wss://tu-servidor:8080');
-
   final transport = HybridTransport(mesh /*, relay: relay*/);
 
   final location = LocationService();
@@ -48,11 +52,16 @@ Future<void> main() async {
   );
   await controller.loadSavedGroup();
 
+  // Tema (claro/oscuro) persistido.
+  final themeController = ThemeController();
+  await themeController.load();
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: controller),
         ChangeNotifierProvider.value(value: eventLog),
+        ChangeNotifierProvider.value(value: themeController),
       ],
       child: const BuscamigosApp(),
     ),
@@ -64,10 +73,21 @@ class BuscamigosApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Escucha el ThemeController para alternar tema en caliente.
+    final themeController = context.watch<ThemeController>();
+
+    // Envolvemos en WithForegroundTask para que el servicio funcione bien.
     return MaterialApp(
       title: 'Buscamigos',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark(),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: themeController.mode,
+      builder: (context, child) {
+        return WithForegroundTask(
+          child: child ?? const SizedBox(),
+        );
+      },
       home: const HomeScreen(),
     );
   }
