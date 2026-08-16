@@ -77,7 +77,7 @@ class FakeRelayTransport implements TransportService {
   }
 
   @override
-  Future<void> send(String encryptedBlob) async {
+  Future<void> send(String encryptedBlob, {bool reliable = false}) async {
     if (_state != TransportState.connected) return;
     final senderTag = base64Url.encode(utf8.encode(_selfId ?? 'unknown'));
     _FakeBus.instance.publish(_groupCode!, '$senderTag::$encryptedBlob');

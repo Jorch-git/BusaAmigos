@@ -68,11 +68,12 @@ class HybridTransport implements TransportService {
   }
 
   @override
-  Future<void> send(String encryptedBlob) async {
+  Future<void> send(String encryptedBlob, {bool reliable = false}) async {
     // Manda por ambos caminos en paralelo. El receptor deduplica.
+    // El flag reliable se propaga al mesh (que implementa ACK + reintentos).
     await Future.wait([
-      mesh.send(encryptedBlob),
-      if (relay != null) relay!.send(encryptedBlob),
+      mesh.send(encryptedBlob, reliable: reliable),
+      if (relay != null) relay!.send(encryptedBlob, reliable: reliable),
     ]);
   }
 

@@ -6,6 +6,7 @@ import '../config/theme/app_theme.dart';
 import '../models/group.dart';
 import '../models/member.dart';
 import '../models/position.dart';
+import '../services/ble/ble_proximity_service.dart';
 import '../utils/distance_calculator.dart';
 
 /// El radar circular del video: tres anillos concéntricos (10/50/100 m por
@@ -170,18 +171,45 @@ class _RadarPainter extends CustomPainter {
       fontSize: 12,
       fontWeight: FontWeight.w500,
     );
-    final cardinals = {
-      'N': Offset(center.dx, center.dy - maxR - 4),
-      'S': Offset(center.dx, center.dy + maxR + 4),
-      'E': Offset(center.dx + maxR + 4, center.dy),
-      'W': Offset(center.dx - maxR - 4, center.dy),
-    };
-    cardinals.forEach((label, pos) {
-      tp.text = TextSpan(text: label, style: style);
+
+    // El radar está en modo "heading-up": ARRIBA es hacia donde apunta el
+    // usuario, no el norte. Por eso los cardinales N/S/E/W deben ROTAR según
+    // el heading para seguir señalando las direcciones reales. Un cardinal con
+    // ángulo absoluto `a` (N=0, E=90, S=180, W=270) se dibuja en pantalla en
+    // el ángulo (a - heading).
+    final cardinals = <String, double>{'N': 0, 'E': 90, 'S': 180, 'W': 270};
+    final labelRadius = maxR + 4;
+
+    cardinals.forEach((label, absAngle) {
+      final screenAngle = (absAngle - heading) % 360;
+      final theta = (screenAngle - 90) * math.pi / 180;
+      final pos = Offset(
+        center.dx + labelRadius * math.cos(theta),
+        center.dy + labelRadius * math.sin(theta),
+      );
+      // El norte se resalta para que sirva de referencia.
+      tp.text = TextSpan(
+        text: label,
+        style: label == 'N'
+            ? style.copyWith(
+                color: AppTheme.accentGreen, fontWeight: FontWeight.w700)
+            : style,
+      );
       tp.layout();
-      final p = pos - Offset(tp.width / 2, tp.height / 2);
-      tp.paint(canvas, p);
+      tp.paint(canvas, pos - Offset(tp.width / 2, tp.height / 2));
     });
+
+    // Marca FIJA arriba: un triángulo que indica "hacia donde apuntas tú".
+    // Como el radar es heading-up, esta marca siempre está arriba y representa
+    // tu frente; los miembros aparecen alrededor relativos a ella.
+    final nosePaint = Paint()..color = AppTheme.accentGreen.withValues(alpha: 0.9);
+    final noseY = center.dy - maxR - 16;
+    final path = Path()
+      ..moveTo(center.dx, noseY)
+      ..lineTo(center.dx - 7, noseY - 11)
+      ..lineTo(center.dx + 7, noseY - 11)
+      ..close();
+    canvas.drawPath(path, nosePaint);
   }
 
   void _drawSelf(Canvas canvas, Offset center) {
@@ -216,7 +244,8 @@ class _RadarPainter extends CustomPainter {
     if (point == null) return;
 
     final color = Color(member.colorSeed);
-    final distance = DistanceCalculator.between(selfPos, member.lastPosition);
+    final distance = DistanceCalculator.between(selfPos, member.lastPosition,
+        rssi: BleProximityService.instance.rssiForMember(member.id));
 
     // Sombra suave si SOS activo.
     if (member.sosActive) {
@@ -298,18 +327,37 @@ Offset? _memberPoint(
   final pos = member.lastPosition;
   if (pos == null) return null;
 
-  final result = DistanceCalculator.between(selfPos, pos);
-  if (result.source == DistanceSource.none) return null;
+  // IMPORTANTE: para POSICIONAR en el radar usamos SIEMPRE distancia y bearing
+  // de GPS puro (Haversine), NO la distancia fusionada con RSSI. Motivo: el
+  // RSSI da magnitud pero NO dirección, así que si lo usamos para la posición,
+  // varios miembros cercanos colapsan al centro sin respetar su ángulo real
+  // (bug observado: se veían "juntos" en vez de en lados opuestos). El mapa
+  // siempre usó lat/long puro y por eso sí los ubicaba bien. El RSSI lo usamos
+  // solo para la ETIQUETA de distancia, no para la geometría.
+  if (!selfPos.hasGps || !pos.hasGps) {
+    // Sin GPS de ambos lados no hay dirección posible; no dibujamos el pin en
+    // el radar (la brújula/lista seguirán mostrando proximidad por RSSI).
+    return null;
+  }
 
-  // Distancia normalizada [0..1].
-  final dNorm = (result.meters / radiusMeters).clamp(0.0, 1.0);
+  final distMeters = DistanceCalculator.haversine(
+    selfPos.latitude!, selfPos.longitude!,
+    pos.latitude!, pos.longitude!,
+  );
+  final bearingDeg = DistanceCalculator.bearing(
+    selfPos.latitude!, selfPos.longitude!,
+    pos.latitude!, pos.longitude!,
+  );
+
+  final dNorm = (distMeters / radiusMeters).clamp(0.0, 1.0);
   final distancePx = dNorm * maxR;
 
-  // Bearing relativo al rumbo del usuario: si el norte del radar siempre
-  // está arriba (modo "north-up"), no rotamos. Si quisiéramos modo
-  // "heading-up" restaríamos el heading.
-  final bearingDeg = result.bearing ?? 0;
-  final relBearing = bearingDeg; // norte arriba (modo N-up)
+  // Modo "heading-up": rotamos el bearing absoluto restando hacia dónde apunta
+  // el usuario. Así, lo que tienes FÍSICAMENTE enfrente aparece ARRIBA en el
+  // radar, y los lados coinciden con la realidad (izquierda real = izquierda
+  // en el radar). Antes era "norte arriba" y por eso no cuadraba con lo que
+  // veías al voltear el teléfono.
+  final relBearing = (bearingDeg - heading) % 360;
   final theta = (relBearing - 90) * math.pi / 180;
 
   return Offset(

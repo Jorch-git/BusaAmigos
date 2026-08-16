@@ -11,13 +11,15 @@ import 'services/location/location_service.dart';
 import 'services/logging/event_log_service.dart';
 import 'services/notifications/notification_service.dart';
 import 'services/notifications/foreground_service.dart';
-import 'services/map/tile_cache_service.dart';
+import 'services/ble/rssi_calibration.dart';
 import 'services/sensors/beacon_config.dart';
 import 'services/sensors/sensor_fusion_service.dart';
 import 'services/transport/nearby/nearby_transport.dart';
 import 'services/transport/mesh/mesh_transport.dart';
 import 'services/transport/mesh/mesh_profile.dart';
-import 'services/transport/hybrid/hybrid_transport.dart';
+// import 'services/transport/hybrid/hybrid_transport.dart'; // relay por internet, ya no en uso
+import 'services/transport/anchor/anchor_relay_transport.dart';
+import 'services/transport/composite/mesh_plus_anchor_transport.dart';
 // import 'services/transport/relay/relay_transport.dart'; // para alcance global
 
 Future<void> main() async {
@@ -31,15 +33,15 @@ Future<void> main() async {
   await NotificationService.instance.requestPermission();
   ForegroundKeepAlive.instance.init();
 
-  // Inicializa el caché de tiles del mapa (offline).
-  await TileCacheService.instance.init();
-
   const beaconConfig = BeaconConfig();
 
   // ---- Transporte: mesh multi-hop local sobre Nearby (gratis, offline) ----
+  // Reforzado con anclas LilyGo opcionales (ver ancla/ en la raíz del repo):
+  // si no hay ancla a la vista, funciona igual que con HybridTransport.
   final nearby = NearbyTransport();
   final mesh = MeshTransport(nearby, profile: MeshProfile.highDensity);
-  final transport = HybridTransport(mesh /*, relay: relay*/);
+  final ancla = AnchorRelayTransport();
+  final transport = MeshPlusAnchorTransport(mesh, ancla);
 
   final location = LocationService();
   final storage = GroupStorage();
@@ -60,12 +62,16 @@ Future<void> main() async {
   final themeController = ThemeController();
   await themeController.load();
 
+  // Calibración RSSI→distancia (valores por defecto + ajustes guardados).
+  await RssiCalibration.instance.load();
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: controller),
         ChangeNotifierProvider.value(value: eventLog),
         ChangeNotifierProvider.value(value: themeController),
+        Provider<AnchorRelayTransport>.value(value: ancla),
       ],
       child: const BuscamigosApp(),
     ),

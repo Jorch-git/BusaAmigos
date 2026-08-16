@@ -872,7 +872,9 @@ class GroupController extends ChangeNotifier {
         return;
       }
 
-      await transport.send(enc.blob);
+      // Los mensajes persistent (chat, SOS) van como reliable: la malla los
+      // reintenta hasta recibir ACK. Las posiciones/hello van best-effort.
+      await transport.send(enc.blob, reliable: persistent);
     } catch (e) {
       debugPrint('GroupController: error enviando ${msg.runtimeType}: $e');
       if (persistent) {

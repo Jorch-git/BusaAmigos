@@ -6,10 +6,14 @@ import 'package:provider/provider.dart';
 import '../config/theme/app_theme.dart';
 import '../models/member.dart';
 import '../models/position.dart';
+import '../services/ble/ble_proximity_service.dart';
 import '../services/group_controller.dart';
+import '../services/transport/anchor/anchor_relay_transport.dart';
 import '../services/transport/nearby/nearby_transport.dart';
 import '../services/transport/transport_service.dart';
 import '../utils/distance_calculator.dart';
+import '../widgets/anchor_status_card.dart';
+import 'ble_calibration_screen.dart';
 
 /// Pantalla de desarrollo "Consola". Dividida en dos paneles:
 ///
@@ -82,6 +86,14 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
         _buildSectionTitle('TRANSPORTE P2P (NEARBY)', Icons.device_hub),
         const SizedBox(height: 8),
         _buildNearbyPanel(controller),
+        const SizedBox(height: 24),
+        _buildSectionTitle('ANCLA LILYGO', Icons.router),
+        const SizedBox(height: 8),
+        AnchorStatusCard(anchor: context.read<AnchorRelayTransport>()),
+        const SizedBox(height: 24),
+        _buildSectionTitle('PROXIMIDAD BLE', Icons.bluetooth_searching),
+        const SizedBox(height: 8),
+        _buildBleButton(context),
         const SizedBox(height: 24),
         _buildSectionTitle('COLA DE REENVÍO (OUTBOX)', Icons.outbox),
         const SizedBox(height: 8),
@@ -483,6 +495,59 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
 
   // ====================================================================
   // COLA DE REENVÍO
+  // ====================================================================
+
+  Widget _buildBleButton(BuildContext context) {
+    final running = BleProximityService.instance.isRunning;
+    final readings = BleProximityService.instance.currentReadings;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.cardBg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                running ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                size: 16,
+                color: running ? AppTheme.accentGreen : AppTheme.textMuted,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                running
+                    ? 'BLE activo · ${readings.length} señal(es)'
+                    : 'BLE inactivo (se activa en brújula/radar)',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'La proximidad BLE da distancia fina entre Android. Calíbrala para '
+            'mejores resultados con tus teléfonos.',
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 11, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.tune, size: 18),
+            label: const Text('Abrir calibración BLE'),
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size.fromHeight(46),
+            ),
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const BleCalibrationScreen()));
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   // ====================================================================
 
   Widget _buildOutboxPanel(GroupController controller) {

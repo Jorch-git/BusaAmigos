@@ -41,32 +41,45 @@ class TileCacheService {
 
   Directory? _cacheDir;
 
-  /// Inicializa el directorio de caché. Llamar una vez al arrancar.
+  /// Inicializa el directorio de caché. Es idempotente: llamarlo varias veces
+  /// no hace daño. Se puede llamar al arrancar la app, pero ya NO es
+  /// obligatorio: los métodos que usan el disco se auto-inicializan (ver
+  /// _ensureInit), así que el mapa funciona aunque no se haya llamado init().
   Future<void> init() async {
+    if (_cacheDir != null) return; // ya inicializado
     final docs = await getApplicationDocumentsDirectory();
-    _cacheDir = Directory('${docs.path}/map_tiles');
-    if (!await _cacheDir!.exists()) {
-      await _cacheDir!.create(recursive: true);
+    final dir = Directory('${docs.path}/map_tiles');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
     }
+    _cacheDir = dir;
   }
 
-  Directory get _dir {
-    final d = _cacheDir;
-    if (d == null) {
-      throw StateError('TileCacheService no inicializado. Llama init() primero.');
+  /// Garantiza que el directorio esté listo antes de cualquier operación de
+  /// disco. Esto hace al servicio a prueba de "olvidé llamar init()": si no se
+  /// inicializó, lo hace ahora. Antes, usar el mapa sin init() lanzaba
+  /// StateError y rompía la descarga.
+  Future<Directory> _ensureInit() async {
+    if (_cacheDir == null) {
+      await init();
     }
-    return d;
+    return _cacheDir!;
   }
 
-  /// Ruta en disco para un tile (z, x, y).
+  /// Ruta en disco para un tile (z, x, y). Si el servicio aún no se inicializó,
+  /// devuelve la ruta basada en lo que haya (los métodos async ya aseguran la
+  /// inicialización antes de leer/escribir, así que en la práctica _cacheDir
+  /// ya existe cuando esto se usa).
   File tileFile(int z, int x, int y) {
-    return File('${_dir.path}/$z/$x/$y.png');
+    final base = _cacheDir?.path ?? '';
+    return File('$base/$z/$x/$y.png');
   }
 
   /// Devuelve los bytes de un tile desde el disco, o `null` si no está cacheado.
   Future<Uint8List?> readTile(int z, int x, int y) async {
     try {
-      final f = tileFile(z, x, y);
+      final dir = await _ensureInit();
+      final f = File('${dir.path}/$z/$x/$y.png');
       if (await f.exists()) {
         return await f.readAsBytes();
       }
@@ -79,7 +92,8 @@ class TileCacheService {
   /// Guarda los bytes de un tile en disco.
   Future<void> writeTile(int z, int x, int y, Uint8List bytes) async {
     try {
-      final f = tileFile(z, x, y);
+      final dir = await _ensureInit();
+      final f = File('${dir.path}/$z/$x/$y.png');
       await f.parent.create(recursive: true);
       await f.writeAsBytes(bytes);
     } catch (e) {
@@ -173,6 +187,11 @@ class TileCacheService {
     void Function(int done, int total)? onProgress,
     TileDownloadCancelToken? cancelToken,
   }) async {
+    // Aseguramos que el directorio exista ANTES de empezar a bajar. Sin esto,
+    // si nadie llamó init(), la descarga tronaba con StateError y se quedaba
+    // en 0% (bug observado en Xiaomi y otros).
+    await _ensureInit();
+
     final total = countTiles(
       north: north, south: south, east: east, west: west,
       minZoom: minZoom, maxZoom: maxZoom,
@@ -210,8 +229,9 @@ class TileCacheService {
     var count = 0;
     var bytes = 0;
     try {
-      if (await _dir.exists()) {
-        await for (final entity in _dir.list(recursive: true)) {
+      final dir = await _ensureInit();
+      if (await dir.exists()) {
+        await for (final entity in dir.list(recursive: true)) {
           if (entity is File && entity.path.endsWith('.png')) {
             count++;
             bytes += await entity.length();
@@ -227,9 +247,10 @@ class TileCacheService {
   /// Borra toda la caché de tiles.
   Future<void> clearCache() async {
     try {
-      if (await _dir.exists()) {
-        await _dir.delete(recursive: true);
-        await _dir.create(recursive: true);
+      final dir = await _ensureInit();
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+        await dir.create(recursive: true);
       }
     } catch (e) {
       debugPrint('TileCache: error limpiando caché: $e');

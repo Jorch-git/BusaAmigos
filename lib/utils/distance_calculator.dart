@@ -1,27 +1,19 @@
 import 'dart:math' as math;
 
 import '../models/position.dart';
+import '../services/ble/rssi_calibration.dart';
 
 /// Resultado de calcular distancia entre dos miembros.
 ///
-/// v14: ahora incluye un [label] honesto y una bandera [isVeryClose]. La idea:
-/// a corta distancia el GPS miente (error de ±10-17 m puede ser MAYOR que la
-/// distancia real). En vez de mostrar "1.7 m" cuando el error es ±17 m —lo
-/// cual confunde porque a veces marca lejos a quien tienes al lado—, mostramos
-/// un texto cualitativo como "Muy cerca". El número solo se muestra cuando es
-/// confiable (la distancia es claramente mayor que el error).
+/// v15: fusión RSSI + GPS con rangos escalonados. La distancia se reporta en
+/// escalones honestos (<1 m, ~5 m, ~10 m, ~15 m, ~20 m, ~25 m, 25 m+) porque
+/// ni el RSSI ni el GPS tienen resolución para metros exactos. Mejor un rango
+/// confiable que un número falso.
 class DistanceResult {
   final double meters;
   final DistanceSource source;
-
-  /// Error estimado en metros. La UI puede mostrar "±N m".
   final double? errorMeters;
-
-  /// Rumbo (bearing) desde el observador hacia el objetivo, en grados
-  /// donde 0 = norte. `null` si solo tenemos RSSI (no hay dirección).
   final double? bearing;
-
-  /// Nivel de confianza del cálculo de distancia.
   final DistanceConfidence confidence;
 
   const DistanceResult({
@@ -32,83 +24,74 @@ class DistanceResult {
     this.confidence = DistanceConfidence.none,
   });
 
-  /// `true` cuando GPS/señal indican que están prácticamente encima (el error
-  /// hace que el número exacto no tenga sentido). La UI muestra "Muy cerca".
   bool get isVeryClose => confidence == DistanceConfidence.veryClose;
-
-  /// `true` cuando no hay datos para calcular distancia.
   bool get hasNoData => source == DistanceSource.none;
 
-  /// Texto corto y honesto listo para mostrar en la UI.
-  ///  - "Muy cerca"        cuando están prácticamente encima.
-  ///  - "~24 m"            cuando el GPS es confiable.
-  ///  - "~30 m aprox."     cuando hay distancia pero con incertidumbre alta.
-  ///  - "Sin ubicación"    cuando no hay datos.
+  /// Texto honesto en escalones para mostrar en la UI.
   String get label {
-    switch (confidence) {
-      case DistanceConfidence.none:
-        return 'Sin ubicación';
-      case DistanceConfidence.veryClose:
-        return 'Muy cerca';
-      case DistanceConfidence.approximate:
-        // Redondeamos a múltiplos de 5 para no fingir precisión que no hay.
-        final rounded = (meters / 5).round() * 5;
-        final shown = rounded < 5 ? 5 : rounded;
-        return '~$shown m aprox.';
-      case DistanceConfidence.good:
-        return '~${meters.toStringAsFixed(0)} m';
+    if (source == DistanceSource.none) return 'Sin ubicación';
+    if (confidence == DistanceConfidence.veryClose) {
+      // Muy cerca: si la estimación es de menos de 1 m, lo decimos.
+      if (meters < 1.0) return 'Menos de 1 m';
+      return 'Muy cerca';
     }
+    return _stepLabel(meters);
   }
 
-  /// Versión compacta para el radar (sin la palabra "aprox").
+  /// Versión compacta para el radar.
   String get labelShort {
-    switch (confidence) {
-      case DistanceConfidence.none:
-        return '—';
-      case DistanceConfidence.veryClose:
-        return 'Muy cerca';
-      case DistanceConfidence.approximate:
-        final rounded = (meters / 5).round() * 5;
-        final shown = rounded < 5 ? 5 : rounded;
-        return '~$shown m';
-      case DistanceConfidence.good:
-        return '~${meters.toStringAsFixed(0)} m';
+    if (source == DistanceSource.none) return '—';
+    if (confidence == DistanceConfidence.veryClose) {
+      if (meters < 1.0) return '<1 m';
+      return 'Muy cerca';
     }
+    return _stepLabel(meters);
+  }
+
+  /// Convierte metros a un escalón de 5 en 5: ~5, ~10, ~15, ~20, ~25, 25 m+.
+  static String _stepLabel(double m) {
+    if (m < 3) return 'Muy cerca';
+    if (m <= 7) return '~5 m';
+    if (m <= 12) return '~10 m';
+    if (m <= 17) return '~15 m';
+    if (m <= 22) return '~20 m';
+    if (m <= 27) return '~25 m';
+    return '25 m+';
   }
 }
 
-enum DistanceSource { gps, rssi, none }
+enum DistanceSource {
+  /// Distancia por fuerza de señal BLE (proximidad fina a corta distancia).
+  rssi,
 
-/// Qué tan confiable es la distancia calculada.
-enum DistanceConfidence {
-  /// No hay datos suficientes.
+  /// Distancia por GPS (Haversine).
+  gps,
+
+  /// Combinación de ambos.
+  fused,
+
   none,
-
-  /// Están prácticamente encima; el error supera la distancia. Mostrar
-  /// "Muy cerca" en vez de un número engañoso.
-  veryClose,
-
-  /// Hay distancia pero con incertidumbre alta (error es una fracción
-  /// significativa de la distancia). Mostrar como aproximado.
-  approximate,
-
-  /// Distancia claramente mayor que el error. El número es confiable.
-  good,
 }
 
-/// Cálculos geográficos y de RSSI.
+enum DistanceConfidence { none, veryClose, approximate, good }
+
+/// Cálculos geográficos + fusión RSSI/GPS.
 class DistanceCalculator {
   static const double _earthRadius = 6371000;
 
-  /// Umbral: si la distancia GPS es menor o igual a esto, consideramos que
-  /// están "muy cerca" sin importar el número exacto (porque a esta escala el
-  /// GPS no distingue). 8 m es un valor razonable: a esa distancia ya se ven.
+  /// A esta distancia o menos, consideramos "muy cerca" (el detalle exacto no
+  /// importa porque ya se ven).
   static const double veryCloseThresholdMeters = 8;
 
-  static double haversine(
-    double lat1, double lng1,
-    double lat2, double lng2,
-  ) {
+  /// RSSI a partir del cual consideramos a alguien "muy cerca" sin más cuentas
+  /// (señal muy fuerte = encima). -55 dBm ≈ <2-3 m en la mayoría de casos.
+  static const int veryCloseRssiThreshold = -55;
+
+  /// Por debajo de este RSSI la señal es tan débil que no la usamos para
+  /// distancia (el GPS es mejor a esas distancias). -85 dBm ≈ >15-20 m.
+  static const int usableRssiFloor = -85;
+
+  static double haversine(double lat1, double lng1, double lat2, double lng2) {
     final dLat = _toRad(lat2 - lat1);
     final dLng = _toRad(lng2 - lng1);
     final a = math.pow(math.sin(dLat / 2), 2) +
@@ -118,10 +101,7 @@ class DistanceCalculator {
     return _earthRadius * c;
   }
 
-  static double bearing(
-    double lat1, double lng1,
-    double lat2, double lng2,
-  ) {
+  static double bearing(double lat1, double lng1, double lat2, double lng2) {
     final dLng = _toRad(lng2 - lng1);
     final y = math.sin(dLng) * math.cos(_toRad(lat2));
     final x = math.cos(_toRad(lat1)) * math.sin(_toRad(lat2)) -
@@ -130,77 +110,100 @@ class DistanceCalculator {
     return (_toDeg(brng) + 360) % 360;
   }
 
-  static double rssiDistance(int rssi, {int txPower = -59, double n = 2.5}) {
+  /// Distancia por RSSI usando la calibración activa.
+  static double rssiDistance(int rssi, {int? txPower, double? n}) {
     if (rssi >= 0) return -1;
-    return math.pow(10, (txPower - rssi) / (10 * n)).toDouble();
+    final tx = txPower ?? RssiCalibration.instance.txPowerAt1m.round();
+    final nn = n ?? RssiCalibration.instance.pathLossN;
+    return math.pow(10, (tx - rssi) / (10 * nn)).toDouble();
   }
 
-  /// Calcula la distancia entre [self] y [other], clasificando la confianza.
+  /// ALGORITMO DE FUSIÓN (el corazón de v15).
   ///
-  /// Lógica de confianza (esta es la corrección clave):
-  ///  1. Si la distancia es muy chica (≤ umbral) O el error es mayor que la
-  ///     distancia → "muy cerca" (el GPS no puede distinguir a esta escala).
-  ///  2. Si el error es una fracción notable de la distancia (>40%) →
-  ///     "aproximado".
-  ///  3. Si la distancia es claramente mayor que el error → "good".
-  static DistanceResult between(Position? self, Position? other) {
-    if (self == null || other == null) {
-      return const DistanceResult(
-          meters: 0, source: DistanceSource.none,
-          confidence: DistanceConfidence.none);
-    }
-
-    if (self.hasGps && other.hasGps) {
-      final d = haversine(
-        self.latitude!, self.longitude!,
-        other.latitude!, other.longitude!,
-      );
+  /// Prioridad de fuentes:
+  ///  1. RSSI fuerte (≥ -55 dBm): "muy cerca", gana sobre todo. Es el caso de
+  ///     dos Android pegados — el GPS diría números erráticos, el RSSI no.
+  ///  2. RSSI usable (-55 a -85) Y GPS poco confiable: usar RSSI (mejor a
+  ///     corta distancia donde el GPS falla).
+  ///  3. GPS confiable (error < distancia): usar GPS con rangos escalonados.
+  ///  4. RSSI usable sin GPS confiable: usar RSSI aproximado.
+  ///  5. Solo GPS (aunque ruidoso): última opción, marcado como aproximado.
+  ///
+  /// El [rssi] viene del BleProximityService (null si no hay lectura BLE, p.ej.
+  /// el peer es iPhone o está fuera de alcance BLE → caemos a GPS).
+  static DistanceResult between(Position? self, Position? other, {int? rssi}) {
+    // --- Datos GPS disponibles ---
+    final hasGps = self != null && other != null && self.hasGps && other.hasGps;
+    double? gpsDist;
+    double? gpsErr;
+    double? brng;
+    if (hasGps) {
+      gpsDist = haversine(
+          self.latitude!, self.longitude!, other.latitude!, other.longitude!);
       final selfAcc = self.accuracy ?? 5;
       final otherAcc = other.accuracy ?? 5;
-      // Error combinado: raíz de la suma de cuadrados de las precisiones.
-      final err = math.sqrt(selfAcc * selfAcc + otherAcc * otherAcc);
-      final brng = bearing(
-        self.latitude!, self.longitude!,
-        other.latitude!, other.longitude!,
-      );
+      gpsErr = math.sqrt(selfAcc * selfAcc + otherAcc * otherAcc);
+      brng = bearing(
+          self.latitude!, self.longitude!, other.latitude!, other.longitude!);
+    }
 
-      // Clasificación de confianza.
-      final DistanceConfidence conf;
-      if (d <= veryCloseThresholdMeters || d <= err) {
-        // Están encima, o el error es tan grande como la distancia: el número
-        // no es confiable. Mejor decir "muy cerca".
-        conf = DistanceConfidence.veryClose;
-      } else if (err > d * 0.4) {
-        // El error es una fracción importante de la distancia: aproximado.
-        conf = DistanceConfidence.approximate;
-      } else {
-        conf = DistanceConfidence.good;
-      }
+    // --- Datos RSSI disponibles ---
+    // Tomamos el rssi pasado como argumento (lectura BLE en vivo) o, si no,
+    // el que venga embebido en la posición del peer.
+    final effectiveRssi = rssi ?? other?.rssi;
+    final hasUsableRssi =
+        effectiveRssi != null && effectiveRssi >= usableRssiFloor;
 
+    // 1. RSSI MUY fuerte → muy cerca, gana sobre todo.
+    if (effectiveRssi != null && effectiveRssi >= veryCloseRssiThreshold) {
+      final d = rssiDistance(effectiveRssi);
       return DistanceResult(
         meters: d,
-        source: DistanceSource.gps,
-        errorMeters: err,
+        source: hasGps ? DistanceSource.fused : DistanceSource.rssi,
+        bearing: brng, // si hay GPS, conservamos la dirección
+        confidence: DistanceConfidence.veryClose,
+      );
+    }
+
+    // 2 y 4. RSSI usable y (no hay GPS confiable). El GPS es "confiable" si su
+    // error es claramente menor que la distancia que mide.
+    final gpsReliable =
+        hasGps && gpsErr != null && gpsDist != null && gpsErr < gpsDist * 0.6 &&
+            gpsDist > veryCloseThresholdMeters;
+
+    if (hasUsableRssi && !gpsReliable) {
+      final d = rssiDistance(effectiveRssi);
+      final conf = d <= veryCloseThresholdMeters
+          ? DistanceConfidence.veryClose
+          : DistanceConfidence.approximate;
+      return DistanceResult(
+        meters: d,
+        source: hasGps ? DistanceSource.fused : DistanceSource.rssi,
         bearing: brng,
         confidence: conf,
       );
     }
 
-    if (other.hasRssi) {
-      // RSSI: a corta distancia la señal fuerte indica proximidad. Si la
-      // estimación es chica, "muy cerca"; si no, aproximado (RSSI nunca es
-      // preciso en metros).
-      final rd = other.rssiDistance!;
-      final conf = rd <= veryCloseThresholdMeters
-          ? DistanceConfidence.veryClose
-          : DistanceConfidence.approximate;
+    // 3 y 5. Camino GPS (con o sin confiabilidad alta).
+    if (hasGps) {
+      final DistanceConfidence conf;
+      if (gpsDist! <= veryCloseThresholdMeters || gpsDist <= gpsErr!) {
+        conf = DistanceConfidence.veryClose;
+      } else if (gpsErr > gpsDist * 0.4) {
+        conf = DistanceConfidence.approximate;
+      } else {
+        conf = DistanceConfidence.good;
+      }
       return DistanceResult(
-        meters: rd,
-        source: DistanceSource.rssi,
+        meters: gpsDist,
+        source: DistanceSource.gps,
+        errorMeters: gpsErr,
+        bearing: brng,
         confidence: conf,
       );
     }
 
+    // Sin nada utilizable.
     return const DistanceResult(
         meters: 0, source: DistanceSource.none,
         confidence: DistanceConfidence.none);

@@ -140,7 +140,7 @@ class RelayTransport implements TransportService {
   }
 
   @override
-  Future<void> send(String encryptedBlob) async {
+  Future<void> send(String encryptedBlob, {bool reliable = false}) async {
     final socket = _socket;
     if (socket == null || _state != TransportState.connected) return;
     try {

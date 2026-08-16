@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../config/theme/app_theme.dart';
 import '../models/member.dart';
+import '../services/ble/ble_proximity_service.dart';
 import '../services/group_controller.dart';
 import '../utils/distance_calculator.dart';
 
@@ -27,12 +28,15 @@ class _CompassScreenState extends State<CompassScreen> {
   IconData _trendIcon = Icons.remove;
 
   StreamSubscription<double>? _headingSub;
+  StreamSubscription<void>? _bleSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final location = context.read<GroupController>().location;
+      if (!mounted) return;
+      final controller = context.read<GroupController>();
+      final location = controller.location;
       _userHeading = location.lastHeading ?? 0.0;
       _headingSub = location.headingStream.listen((heading) {
         if (!mounted) return;
@@ -41,12 +45,26 @@ class _CompassScreenState extends State<CompassScreen> {
         });
         _updateDistanceTrend();
       });
+
+      // Arrancar proximidad BLE (solo mientras estamos en esta pantalla, para
+      // ahorrar batería). Si el dispositivo no soporta advertising (iOS), el
+      // servicio igual escanea y, si no hay nada, caemos al GPS.
+      final selfId = controller.group?.self?.id;
+      if (selfId != null) {
+        BleProximityService.instance.start(selfMemberId: selfId);
+        _bleSub = BleProximityService.instance.updates.listen((_) {
+          if (mounted) setState(() {});
+        });
+      }
     });
   }
 
   @override
   void dispose() {
     _headingSub?.cancel();
+    _bleSub?.cancel();
+    // Detener BLE al salir de la pantalla (ahorro de batería).
+    BleProximityService.instance.stop();
     super.dispose();
   }
 
@@ -63,6 +81,7 @@ class _CompassScreenState extends State<CompassScreen> {
     final currentDistance = DistanceCalculator.between(
       group.self?.lastPosition,
       target.lastPosition,
+      rssi: BleProximityService.instance.rssiForMember(target.id),
     ).meters;
 
     if (_previousDistance != null) {
@@ -107,7 +126,8 @@ class _CompassScreenState extends State<CompassScreen> {
     );
 
     final selfPos = group.self?.lastPosition;
-    final result = DistanceCalculator.between(selfPos, target.lastPosition);
+    final result = DistanceCalculator.between(selfPos, target.lastPosition,
+        rssi: BleProximityService.instance.rssiForMember(target.id));
     final hasDirection = result.bearing != null;
     final relativeAngle = hasDirection
         ? (result.bearing! - _userHeading + 360) % 360

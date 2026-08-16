@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -25,11 +27,25 @@ class _MapScreenState extends State<MapScreen> {
   final _mapController = MapController();
   bool _followSelf = true;
 
+  /// Refresca el mapa cada pocos segundos para que el texto "hace Xm" y la
+  /// transparencia de los pines (online → stale → offline) se actualicen
+  /// solos conforme pasa el tiempo, sin depender de mensajes entrantes.
+  Timer? _refreshTimer;
+
   /// Centro por defecto si todavía no hay GPS (Foro Sol, CDMX).
   static const _fallbackCenter = LatLng(19.4044, -99.0975);
 
   @override
+  void initState() {
+    super.initState();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
   void dispose() {
+    _refreshTimer?.cancel();
     _mapController.dispose();
     super.dispose();
   }
@@ -179,8 +195,8 @@ class _MapScreenState extends State<MapScreen> {
       markers.add(
         Marker(
           point: LatLng(pos.latitude!, pos.longitude!),
-          width: 80,
-          height: 70,
+          width: 96,
+          height: 88,
           child: _MemberPin(member: m, onTap: () => _openCompass(m)),
         ),
       );
@@ -293,24 +309,45 @@ class _MemberPin extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = Color(member.colorSeed);
-    final isOnline = member.status == MemberStatus.online;
+    final baseColor = Color(member.colorSeed);
+    final status = member.status;
+    final isOnline = status == MemberStatus.online;
+
+    // Cuando el miembro NO está online, el pin se ve TRANSPARENTE para
+    // comunicar que es su "última ubicación conocida", no su posición actual.
+    // Cuanto más viejo, más tenue.
+    final double pinOpacity;
+    switch (status) {
+      case MemberStatus.online:
+        pinOpacity = 1.0;
+        break;
+      case MemberStatus.stale:
+        pinOpacity = 0.55; // semitransparente
+        break;
+      case MemberStatus.offline:
+        pinOpacity = 0.35; // muy tenue
+        break;
+    }
+
+    // Texto de "hace cuánto" fue la última ubicación válida.
+    final agoText = _lastSeenAgo(member);
 
     return GestureDetector(
       onTap: onTap,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Nombre.
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.6),
+              color: Colors.black.withValues(alpha: isOnline ? 0.6 : 0.45),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               member.displayName,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: isOnline ? 1.0 : 0.8),
                 fontSize: 10,
                 fontWeight: FontWeight.w600,
               ),
@@ -319,57 +356,108 @@ class _MemberPin extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isOnline ? Colors.white : Colors.white54,
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      blurRadius: 4,
+
+          // Avatar (con opacidad según estado).
+          Opacity(
+            opacity: pinOpacity,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: baseColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      // Online: borde sólido. Si no: borde punteado-simulado
+                      // con color tenue para reforzar "no confirmado".
+                      color: isOnline
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.5),
+                      width: 2,
                     ),
-                  ],
+                    boxShadow: isOnline
+                        ? [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 4,
+                            ),
+                          ]
+                        : null, // sin sombra cuando es histórico (más "plano")
+                  ),
+                  child: Center(
+                    child: Text(
+                      member.displayName.isNotEmpty
+                          ? member.displayName[0].toUpperCase()
+                          : '?',
+                      style: TextStyle(
+                        color: Colors.black.withValues(alpha: isOnline ? 1.0 : 0.7),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
                 ),
-                child: Center(
-                  child: Text(
-                    member.displayName.isNotEmpty
-                        ? member.displayName[0].toUpperCase()
-                        : '?',
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
+                // Ícono de "histórico" (reloj) en la esquina cuando no es online.
+                if (!isOnline)
+                  Positioned(
+                    bottom: -2,
+                    right: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFEEC42E),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.history,
+                        size: 9,
+                        color: Colors.black,
+                      ),
                     ),
                   ),
+              ],
+            ),
+          ),
+
+          // Etiqueta "hace Xm" debajo, solo cuando no está online.
+          if (!isOnline && agoText != null) ...[
+            const SizedBox(height: 2),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEEC42E).withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                agoText,
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              if (!isOnline)
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEEC42E),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 1.5),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// Texto compacto de cuánto hace que vimos al miembro por última vez.
+  /// Devuelve null si no hay dato de tiempo.
+  static String? _lastSeenAgo(Member m) {
+    // Preferimos lastSeenAt (cualquier mensaje); si no, la edad de la posición.
+    final DateTime? ref = m.lastSeenAt ?? m.lastPosition?.timestamp;
+    if (ref == null) return null;
+    final secs = DateTime.now().difference(ref).inSeconds;
+    if (secs < 60) return 'hace ${secs}s';
+    final mins = secs ~/ 60;
+    if (mins < 60) return 'hace ${mins}m';
+    final hours = mins ~/ 60;
+    if (hours < 24) return 'hace ${hours}h';
+    final days = hours ~/ 24;
+    return 'hace ${days}d';
   }
 }

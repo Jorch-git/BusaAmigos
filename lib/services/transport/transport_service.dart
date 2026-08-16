@@ -59,7 +59,13 @@ abstract class TransportService {
 
   /// Envía un blob cifrado a todos los demás miembros del grupo.
   /// El transporte no entiende qué hay dentro, solo lo entrega.
-  Future<void> send(String encryptedBlob);
+  ///
+  /// [reliable]: si es true, el transporte intentará garantizar la entrega
+  /// (ACK + reintentos en la capa mesh). Se usa para chat y SOS. Las
+  /// posiciones van con reliable=false porque se renuevan constantemente.
+  /// Las implementaciones que no soportan fiabilidad simplemente ignoran el
+  /// flag y entregan best-effort.
+  Future<void> send(String encryptedBlob, {bool reliable = false});
 
   /// Detiene el transporte y libera recursos.
   Future<void> stop();

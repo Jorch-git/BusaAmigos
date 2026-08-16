@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../config/theme/app_theme.dart';
 import '../models/member.dart';
+import '../services/ble/ble_proximity_service.dart';
 import '../services/group_controller.dart';
 import '../utils/distance_calculator.dart';
 import 'compass_screen.dart';
@@ -160,7 +161,8 @@ class GroupScreen extends StatelessWidget {
   ) {
     final result = m.isSelf
         ? null
-        : DistanceCalculator.between(selfPos, m.lastPosition);
+        : DistanceCalculator.between(selfPos, m.lastPosition,
+            rssi: BleProximityService.instance.rssiForMember(m.id));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
