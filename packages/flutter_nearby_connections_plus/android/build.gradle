@@ -1,0 +1,50 @@
+// Copia local de flutter_nearby_connections_plus 1.2.2 (ver PARCHES.md).
+group = 'com.nankai.flutter_nearby_connections'
+version = '1.0-SNAPSHOT'
+
+buildscript {
+    // Mismas versiones que la app (android/settings.gradle.kts).
+    ext.kotlin_version = '2.1.0'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.9.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    // AGP 8 exige namespace; antes lo inyectaba el truco de android/build.gradle.kts.
+    namespace = 'com.nankai.flutter_nearby_connections'
+    compileSdk = 36
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    defaultConfig {
+        minSdk = 21
+    }
+
+    // Mismo nivel de Java que la app, para no depender de
+    // kotlin.jvm.target.validation.mode=warning.
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    kotlinOptions {
+        jvmTarget = '11'
+    }
+}
+
+dependencies {
+    api 'com.google.android.gms:play-services-nearby:18.5.0'
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'com.google.android.gms:play-services-location:17.1.0'
+    implementation 'androidx.core:core-ktx:1.9.0'
+}
