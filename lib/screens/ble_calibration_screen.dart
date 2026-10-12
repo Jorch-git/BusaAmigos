@@ -7,7 +7,6 @@ import '../config/theme/app_theme.dart';
 import '../services/ble/ble_proximity_service.dart';
 import '../services/ble/rssi_calibration.dart';
 import '../services/group_controller.dart';
-import '../utils/distance_calculator.dart';
 import '../utils/short_id.dart';
 
 /// Pantalla de calibración y diagnóstico BLE. Permite:
@@ -324,7 +323,7 @@ class _BleCalibrationScreenState extends State<BleCalibrationScreen> {
               'El RSSI (señal BLE) sirve para proximidad fina entre Android. '
               'Es ruidoso: un cuerpo o el bolsillo lo afectan. Calibrar mejora '
               'la conversión a metros para tus teléfonos.',
-              style: TextStyle(
+              style: const TextStyle(
                   color: AppTheme.textMuted, fontSize: 12, height: 1.4),
             ),
           ),
@@ -334,12 +333,14 @@ class _BleCalibrationScreenState extends State<BleCalibrationScreen> {
   }
 
   Widget _sectionTitle(String text) {
-    return Text(text,
-        style: const TextStyle(
-            color: AppTheme.accentGreen,
-            fontWeight: FontWeight.w700,
-            fontSize: 12,
-            letterSpacing: 1));
+    return Text(
+      text,
+      style: const TextStyle(
+          color: AppTheme.accentGreen,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+          letterSpacing: 1),
+    );
   }
 
   Widget _card({required Widget child, EdgeInsets? margin}) {

@@ -88,7 +88,6 @@ class AnchorRelayTransport implements TransportService {
   final _anchorCtrl = StreamController<AnchorInfo?>.broadcast();
 
   TransportState _state = TransportState.idle;
-  String? _selfId;
   String? _canal;
   WebSocket? _socket;
   StreamSubscription? _socketSub;
@@ -132,7 +131,6 @@ class AnchorRelayTransport implements TransportService {
   @override
   Future<void> start({required String groupCode, required String selfId}) async {
     _activo = true;
-    _selfId = selfId;
     // El ancla recibe el HASH del código, nunca el código.
     _canal = await ChannelId.fromGroupCode(groupCode);
     _setState(TransportState.degraded); // sin ancla todavía: no es un error
